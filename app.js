@@ -45,7 +45,7 @@ async function init() {
 }
 
 async function fetchQuestionBank() {
-  const response = await fetch("questions.json");
+  const response = await fetch("/questions.json");
   return response.json();
 }
 
