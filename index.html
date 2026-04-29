@@ -7,33 +7,7 @@
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <section id="authView" class="auth-shell" hidden>
-      <div class="auth-panel">
-        <h1>业余无线电刷题</h1>
-        <p>登录后同步学习进度，并复用服务器缓存的 AI 解析。</p>
-        <div class="auth-grid">
-          <label>
-            用户名
-            <input id="authUsername" type="text" autocomplete="username">
-          </label>
-          <label>
-            密码
-            <input id="authPassword" type="password" autocomplete="current-password">
-          </label>
-          <label>
-            邀请码
-            <input id="authInvite" type="text" autocomplete="off" placeholder="注册时填写">
-          </label>
-        </div>
-        <div class="auth-actions">
-          <button id="loginBtn" type="button">登录</button>
-          <button id="registerBtn" class="secondary" type="button">注册</button>
-        </div>
-        <div id="authStatus" class="ai-status" hidden></div>
-      </div>
-    </section>
-
-    <main id="appShell" class="shell" hidden>
+    <main id="appShell" class="shell">
       <header class="topbar">
         <div>
           <h1>业余无线电刷题</h1>

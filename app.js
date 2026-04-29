@@ -23,20 +23,23 @@ document.addEventListener("DOMContentLoaded", init);
 async function init() {
   bindElements();
   bindEvents();
-  state.currentUser = await fetchCurrentUser();
 
   try {
     state.payload = window.QUESTION_BANK || await fetchQuestionBank();
     state.questions = state.payload.questions;
     setupCategories();
-    if (state.currentUser) {
-      state.progress = await fetchProgress();
-    }
+    // 获取当前用户信息
+    state.currentUser = await fetchCurrentUser();
+    // 获取学习进度
+    state.progress = await fetchProgress();
     applyFilter();
-    renderAuth();
     renderAll();
+    // 显示用户名
+    if (state.currentUser) {
+      els.currentUserLabel.textContent = `当前用户：${state.currentUser.username}`;
+    }
   } catch (error) {
-    document.getElementById("subtitle").textContent = "题库载入失败，请用本地静态服务器打开 index.html。";
+    document.getElementById("subtitle").textContent = "题库载入失败，请刷新重试。";
     console.error(error);
   }
 }
@@ -62,75 +65,13 @@ async function fetchProgress() {
   return response.json();
 }
 
-async function authRequest(path, payload) {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await parseJsonResponse(response);
-  if (!response.ok) {
-    throw new Error(data?.detail || data?.error?.message || `${response.status} ${response.statusText}`);
-  }
-  return data;
-}
-
-async function login() {
-  try {
-    setAuthStatus("正在登录...", "loading");
-    state.currentUser = await authRequest("/api/auth/login", authPayload(false));
-    state.progress = await fetchProgress();
-    applyFilter();
-    renderAuth();
-    renderAll();
-    clearAuthStatus();
-  } catch (error) {
-    setAuthStatus(error.message, "error");
-  }
-}
-
-async function register() {
-  try {
-    setAuthStatus("正在注册...", "loading");
-    state.currentUser = await authRequest("/api/auth/register", authPayload(true));
-    state.progress = await fetchProgress();
-    applyFilter();
-    renderAuth();
-    renderAll();
-    clearAuthStatus();
-  } catch (error) {
-    setAuthStatus(error.message, "error");
-  }
-}
 
 async function logout() {
   await fetch("/api/auth/logout", { method: "POST" });
-  state.currentUser = null;
-  state.progress = { answers: {}, wrong: [] };
-  state.llmCache = {};
-  renderAuth();
+  // 退出登录，重定向回登录页
+  window.location.href = "/";
 }
 
-function authPayload(includeInvite) {
-  const payload = {
-    username: els.authUsername.value.trim(),
-    password: els.authPassword.value,
-  };
-  if (includeInvite) payload.invite_code = els.authInvite.value.trim();
-  return payload;
-}
-
-function setAuthStatus(message, type = "") {
-  els.authStatus.hidden = false;
-  els.authStatus.className = `ai-status ${type}`;
-  els.authStatus.textContent = message;
-}
-
-function clearAuthStatus() {
-  els.authStatus.hidden = true;
-  els.authStatus.className = "ai-status";
-  els.authStatus.textContent = "";
-}
 
 function bindElements() {
   [
@@ -139,8 +80,7 @@ function bindElements() {
     "options", "feedback", "prevBtn", "submitBtn", "nextBtn", "wrongList", "clearWrongBtn",
     "examCount", "startExamBtn", "examSetup", "examPaper", "examResult", "categoryStats",
     "jumpDialog", "jumpTitle", "jumpHint", "jumpGrid", "closeJumpBtn",
-    "authView", "appShell", "authUsername", "authPassword", "authInvite", "loginBtn", "registerBtn",
-    "authStatus", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
+    "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
     "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
@@ -169,8 +109,6 @@ function bindEvents() {
   els.questionCounter.addEventListener("click", openQuestionJump);
   els.questionCategory.addEventListener("click", openCategoryJump);
   els.closeJumpBtn.addEventListener("click", closeJump);
-  els.loginBtn.addEventListener("click", login);
-  els.registerBtn.addEventListener("click", register);
   els.logoutBtn.addEventListener("click", logout);
   els.generateAiBtn.addEventListener("click", () => generateAiExplanation(false));
   els.regenerateAiBtn.addEventListener("click", () => generateAiExplanation(true));
@@ -193,13 +131,12 @@ function loadProgress() {
 }
 
 function saveProgress() {
-  if (!state.currentUser) return;
   fetch("/api/progress", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(state.progress),
   }).catch(() => {
-    setCacheToolStatus("进度保存失败，请检查登录状态。", "error");
+    setCacheToolStatus("进度保存失败，请刷新重试。", "error");
   });
 }
 
@@ -236,19 +173,12 @@ function setMode(mode) {
 }
 
 function renderAll() {
-  if (!state.currentUser) return;
   renderHeader();
   renderPractice();
   renderWrongList();
   renderStats();
 }
 
-function renderAuth() {
-  const loggedIn = Boolean(state.currentUser);
-  els.authView.hidden = loggedIn;
-  els.appShell.hidden = !loggedIn;
-  els.currentUserLabel.textContent = loggedIn ? `当前用户：${state.currentUser.username}` : "";
-}
 
 function renderHeader() {
   const answered = Object.keys(state.progress.answers).length;
