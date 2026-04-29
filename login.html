@@ -195,8 +195,14 @@
         authStatus: document.getElementById("authStatus"),
       };
 
-      els.loginBtn.addEventListener("click", login);
-      els.registerBtn.addEventListener("click", toggleMode);
+      els.loginBtn.addEventListener("click", () => {
+        if (state.mode === "login") login();
+        else toggleMode();
+      });
+      els.registerBtn.addEventListener("click", () => {
+        if (state.mode === "register") register();
+        else toggleMode();
+      });
       els.authPassword.addEventListener("keypress", (e) => {
         if (e.key === "Enter" && state.mode === "login") login();
       });
@@ -242,6 +248,7 @@
           setAuthStatus("正在登录...", "loading");
           const response = await fetch("/api/auth/login", {
             method: "POST",
+            credentials: 'same-origin',
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(getPayload(false)),
           });
@@ -261,6 +268,7 @@
           setAuthStatus("正在注册...", "loading");
           const response = await fetch("/api/auth/register", {
             method: "POST",
+            credentials: 'same-origin',
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(getPayload(true)),
           });
