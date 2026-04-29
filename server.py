@@ -8,6 +8,7 @@ import sqlite3
 import ssl
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -15,6 +16,7 @@ from urllib.request import Request, urlopen
 import bcrypt
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
 
@@ -170,7 +172,7 @@ def init_db():
         print(f"Initial invite code: {code}")
 
 
-def current_user(session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+def current_user(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated.")
     token_hash = session_hash(session_token)
@@ -287,7 +289,26 @@ def startup():
 
 
 @app.get("/")
-def index():
+def login_page():
+    return FileResponse(ROOT / "login.html")
+
+
+@app.get("/app")
+def app_index(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
+    if not session_token:
+        return RedirectResponse(url="/", status_code=302)
+    token_hash = session_hash(session_token)
+    row = one(
+        """
+        SELECT users.id, users.username, sessions.expires_at
+        FROM sessions
+        JOIN users ON users.id = sessions.user_id
+        WHERE sessions.token_hash = ?
+        """,
+        (token_hash,),
+    )
+    if not row or datetime.fromisoformat(row["expires_at"]) <= utc_now():
+        return RedirectResponse(url="/", status_code=302)
     return FileResponse(ROOT / "index.html")
 
 
@@ -327,7 +348,7 @@ def login(payload: Credentials, response: Response):
 
 
 @app.post("/api/auth/logout")
-def logout(response: Response, session_token: str | None = Cookie(default=None, alias=SESSION_COOKIE)):
+def logout(response: Response, session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
     if session_token:
         execute("DELETE FROM sessions WHERE token_hash = ?", (session_hash(session_token),))
     response.delete_cookie(SESSION_COOKIE)
