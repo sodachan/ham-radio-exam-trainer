@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>业余无线电刷题</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <section id="authView" class="auth-shell" hidden>
+      <div class="auth-panel">
+        <h1>业余无线电刷题</h1>
+        <p>登录后同步学习进度，并复用服务器缓存的 AI 解析。</p>
+        <div class="auth-grid">
+          <label>
+            用户名
+            <input id="authUsername" type="text" autocomplete="username">
+          </label>
+          <label>
+            密码
+            <input id="authPassword" type="password" autocomplete="current-password">
+          </label>
+          <label>
+            邀请码
+            <input id="authInvite" type="text" autocomplete="off" placeholder="注册时填写">
+          </label>
+        </div>
+        <div class="auth-actions">
+          <button id="loginBtn" type="button">登录</button>
+          <button id="registerBtn" class="secondary" type="button">注册</button>
+        </div>
+        <div id="authStatus" class="ai-status" hidden></div>
+      </div>
+    </section>
+
+    <main id="appShell" class="shell" hidden>
+      <header class="topbar">
+        <div>
+          <h1>业余无线电刷题</h1>
+          <p id="subtitle">正在载入题库...</p>
+        </div>
+        <div class="stats" aria-label="学习统计">
+          <div><strong id="statAnswered">0</strong><span>已答</span></div>
+          <div><strong id="statAccuracy">0%</strong><span>正确率</span></div>
+          <div><strong id="statWrong">0</strong><span>错题</span></div>
+        </div>
+        <div class="userbar">
+          <span id="currentUserLabel"></span>
+          <button id="logoutBtn" class="ghost" type="button">退出</button>
+        </div>
+      </header>
+
+      <section class="toolbar" aria-label="刷题控制">
+        <div class="tabs" role="tablist" aria-label="模式">
+          <button class="tab active" data-mode="practice" type="button">刷题</button>
+          <button class="tab" data-mode="wrong" type="button">错题本</button>
+          <button class="tab" data-mode="exam" type="button">模拟考试</button>
+          <button class="tab" data-mode="stats" type="button">进度</button>
+        </div>
+        <div class="filters">
+          <label>
+            知识点
+            <select id="categorySelect"></select>
+          </label>
+          <label>
+            顺序
+            <select id="orderSelect">
+              <option value="sequential">顺序</option>
+              <option value="random">随机</option>
+            </select>
+          </label>
+          <button id="resetProgressBtn" class="ghost" type="button">清空进度</button>
+        </div>
+      </section>
+
+      <section id="practiceView" class="view active" aria-live="polite">
+        <article class="question-panel">
+          <div class="question-meta">
+            <button id="questionCounter" class="meta-pill" type="button">第 0 / 0 题</button>
+            <button id="questionCategory" class="meta-pill" type="button">知识点 -</button>
+          </div>
+          <h2 id="questionText"><span id="questionType" class="question-kind">单选</span><span id="questionTextContent">题库载入中</span></h2>
+          <div id="options" class="options"></div>
+          <div id="feedback" class="feedback" hidden></div>
+          <section class="ai-panel" aria-label="AI 解析">
+            <div class="ai-panel-head">
+              <div>
+                <h3>AI 解析</h3>
+                <p id="aiCacheInfo">未生成</p>
+              </div>
+              <div class="ai-actions">
+                <button id="generateAiBtn" type="button">生成解析</button>
+                <button id="regenerateAiBtn" class="ghost" type="button" hidden>重新生成</button>
+              </div>
+            </div>
+            <div id="aiStatus" class="ai-status" hidden></div>
+            <div id="aiContent" class="ai-content empty">配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。</div>
+          </section>
+          <div class="actions">
+            <button id="submitBtn" type="button">提交答案</button>
+            <div class="nav-actions">
+              <button id="prevBtn" class="secondary" type="button">上一题</button>
+              <button id="nextBtn" class="secondary" type="button">下一题</button>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section id="wrongView" class="view">
+        <div class="section-head">
+          <h2>错题本</h2>
+          <button id="clearWrongBtn" class="ghost" type="button">清空错题</button>
+        </div>
+        <div id="wrongList" class="list"></div>
+      </section>
+
+      <section id="examView" class="view">
+        <div class="exam-setup" id="examSetup">
+          <h2>模拟考试</h2>
+          <label>
+            题量
+            <input id="examCount" type="number" min="5" max="100" step="5" value="30">
+          </label>
+          <button id="startExamBtn" type="button">开始考试</button>
+        </div>
+        <div id="examPaper" class="exam-paper" hidden></div>
+        <div id="examResult" class="exam-result" hidden></div>
+      </section>
+
+      <section id="statsView" class="view">
+        <div class="section-head">
+          <h2>知识点进度</h2>
+        </div>
+        <div class="cache-tools">
+          <span id="cacheToolStatus">AI 解析由服务器按题目缓存，多用户可复用同一题解析。</span>
+        </div>
+        <div id="categoryStats" class="category-grid"></div>
+      </section>
+    </main>
+
+    <dialog id="jumpDialog" class="jump-dialog">
+      <div class="jump-head">
+        <div>
+          <h2 id="jumpTitle">跳转</h2>
+          <p id="jumpHint"></p>
+        </div>
+        <button id="closeJumpBtn" class="ghost" type="button">关闭</button>
+      </div>
+      <div id="jumpGrid" class="jump-grid"></div>
+    </dialog>
+
+    <script src="questions.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
