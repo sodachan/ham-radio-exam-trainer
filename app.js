@@ -10,6 +10,7 @@ const state = {
   exam: null,
   currentUser: null,
   llmCache: {},
+  precacheTimer: null,
   progress: {
     answers: {},
     wrong: [],
@@ -37,6 +38,8 @@ async function init() {
     // 显示用户名
     if (state.currentUser) {
       els.currentUserLabel.textContent = `当前用户：${state.currentUser.username}`;
+      await refreshPrecacheStatus();
+      state.precacheTimer = setInterval(refreshPrecacheStatus, 10000);
     }
   } catch (error) {
     document.getElementById("subtitle").textContent = "题库载入失败，请刷新重试。";
@@ -81,7 +84,7 @@ function bindElements() {
     "examCount", "startExamBtn", "examSetup", "examPaper", "examResult", "categoryStats",
     "jumpDialog", "jumpTitle", "jumpHint", "jumpGrid", "closeJumpBtn",
     "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
-    "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus",
+    "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus", "startPrecacheBtn",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
@@ -112,6 +115,7 @@ function bindEvents() {
   els.logoutBtn.addEventListener("click", logout);
   els.generateAiBtn.addEventListener("click", () => generateAiExplanation(false));
   els.regenerateAiBtn.addEventListener("click", () => generateAiExplanation(true));
+  els.startPrecacheBtn.addEventListener("click", startPrecache);
 }
 
 function setupCategories() {
@@ -413,6 +417,55 @@ function formatAiText(text) {
 function setCacheToolStatus(message, type = "") {
   els.cacheToolStatus.className = type;
   els.cacheToolStatus.textContent = message;
+}
+
+async function refreshPrecacheStatus() {
+  try {
+    const response = await fetch("/api/llm/precache");
+    const status = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(status?.detail || `${response.status} ${response.statusText}`);
+    renderPrecacheStatus(status);
+  } catch (error) {
+    setCacheToolStatus(`后台预缓存状态获取失败：${error.message}`, "error");
+  }
+}
+
+async function startPrecache() {
+  try {
+    els.startPrecacheBtn.disabled = true;
+    setCacheToolStatus("正在启动后台预生成任务...", "loading");
+    const response = await fetch("/api/llm/precache", { method: "POST" });
+    const status = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(status?.detail || `${response.status} ${response.statusText}`);
+    renderPrecacheStatus(status);
+  } catch (error) {
+    setCacheToolStatus(`后台预生成启动失败：${error.message}`, "error");
+    els.startPrecacheBtn.disabled = false;
+  }
+}
+
+function renderPrecacheStatus(status) {
+  const total = status.total || 0;
+  const cached = status.cached || 0;
+  if (!status.configured) {
+    setCacheToolStatus(`AI 解析缓存 ${cached}/${total}。未配置 LLM_API_KEY，后台预生成未启动。`, "error");
+    els.startPrecacheBtn.disabled = true;
+    return;
+  }
+  if (status.running) {
+    const current = status.current ? `，当前 ${status.current}` : "";
+    setCacheToolStatus(`后台预生成中：已缓存 ${cached}/${total}，本轮生成 ${status.generated}、跳过 ${status.skipped}、失败 ${status.failed}${current}。`, "loading");
+    els.startPrecacheBtn.disabled = true;
+    return;
+  }
+  if (cached >= total) {
+    setCacheToolStatus(`AI 解析已全部缓存：${cached}/${total}。`, "success");
+    els.startPrecacheBtn.disabled = true;
+    return;
+  }
+  const errorText = status.last_error ? `上次错误：${status.last_error}` : "可继续后台预生成。";
+  setCacheToolStatus(`AI 解析缓存 ${cached}/${total}，剩余 ${status.remaining}。${errorText}`, status.failed ? "error" : "");
+  els.startPrecacheBtn.disabled = false;
 }
 
 function moveQuestion(offset) {
