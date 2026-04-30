@@ -299,16 +299,15 @@ function renderAiPanel(question) {
     els.regenerateAiBtn.hidden = true;
     return;
   }
-  const cached = state.llmCache[question.type];
-  if (!cached) {
-    els.aiCacheInfo.textContent = "未生成";
-    els.aiContent.textContent = "配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。";
-    els.aiContent.className = "ai-content empty";
-    els.generateAiBtn.textContent = "生成解析";
-    els.regenerateAiBtn.hidden = true;
-    return;
-  }
 
+  els.aiCacheInfo.textContent = "未生成";
+  els.aiContent.textContent = "配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。";
+  els.aiContent.className = "ai-content empty";
+  els.generateAiBtn.textContent = "生成解析";
+  els.regenerateAiBtn.hidden = true;
+}
+
+function showAiExplanation(cached) {
   const generatedAt = cached.generatedAt ? new Date(cached.generatedAt).toLocaleString() : "未知时间";
   els.aiCacheInfo.textContent = `${cached.model || "未知模型"} · ${generatedAt}`;
   els.aiContent.className = "ai-content";
@@ -344,7 +343,9 @@ async function generateAiExplanation(force) {
 
   const cached = state.llmCache[question.type];
   if (cached && !force) {
-    renderAiPanel(question);
+    clearAiStatus();
+    showAiExplanation(cached);
+    setAiStatus("已读取本地缓存解析。", "success");
     return;
   }
 
@@ -361,7 +362,7 @@ async function generateAiExplanation(force) {
       generatedAt: result.generatedAt,
       content: result.content,
     };
-    renderAiPanel(question);
+    showAiExplanation(state.llmCache[question.type]);
     setAiStatus(result.cached ? "已读取服务器缓存解析。" : "解析已生成并保存到服务器缓存。", "success");
   } catch (error) {
     setAiStatus(llmErrorMessage(error), "error");
@@ -408,10 +409,68 @@ function llmErrorMessage(error) {
 }
 
 function formatAiText(text) {
-  return escapeHtml(text)
-    .split(/\n{2,}/)
-    .map((paragraph) => `<p>${paragraph.replace(/\n/g, "<br>")}</p>`)
-    .join("");
+  const lines = escapeHtml(text).split(/\r?\n/);
+  const html = [];
+  let paragraph = [];
+  let listType = null;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${paragraph.map(formatInlineMarkdown).join("<br>")}</p>`);
+    paragraph = [];
+  };
+
+  const closeList = () => {
+    if (!listType) return;
+    html.push(`</${listType}>`);
+    listType = null;
+  };
+
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      closeList();
+      return;
+    }
+
+    const heading = /^(#{1,4})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      flushParagraph();
+      closeList();
+      const level = Math.min(heading[1].length + 3, 6);
+      html.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`);
+      return;
+    }
+
+    const unordered = /^[-*]\s+(.+)$/.exec(trimmed);
+    const ordered = /^\d+[.)]\s+(.+)$/.exec(trimmed);
+    const item = unordered || ordered;
+    if (item) {
+      flushParagraph();
+      const nextListType = unordered ? "ul" : "ol";
+      if (listType !== nextListType) {
+        closeList();
+        html.push(`<${nextListType}>`);
+        listType = nextListType;
+      }
+      html.push(`<li>${formatInlineMarkdown(item[1])}</li>`);
+      return;
+    }
+
+    closeList();
+    paragraph.push(trimmed);
+  });
+
+  flushParagraph();
+  closeList();
+  return html.join("");
+}
+
+function formatInlineMarkdown(text) {
+  return text
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function setCacheToolStatus(message, type = "") {
