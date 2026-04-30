@@ -30,6 +30,7 @@ export LLM_BASE_URL="https://api.modelarts-maas.com"
 export LLM_API_PATH="/openai/v1/chat/completions"
 export LLM_API_KEY="your-maas-api-key"
 export LLM_MODEL="deepseek-v3.2"
+export LLM_PRECACHE_ON_START="1"
 ```
 
 可选：
@@ -41,3 +42,5 @@ export COOKIE_SECURE="1"
 ```
 
 部署到 HTTPS 域名后建议设置 `COOKIE_SECURE=1`。
+
+`LLM_PRECACHE_ON_START=1` 时，服务启动后会在后台按题目预生成 AI 解析并写入服务器缓存；没有配置 `LLM_API_KEY` 时不会启动。设置为 `0` 可关闭启动时预生成，登录后仍可在“进度”页手动启动。

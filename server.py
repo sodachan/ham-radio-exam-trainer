@@ -6,6 +6,7 @@ import os
 import secrets
 import sqlite3
 import ssl
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,7 @@ SESSION_DAYS = 14
 PROMPT_VERSION = "ham-explain-v1"
 DEFAULT_API_PATH = "/openai/v1/chat/completions"
 TIMEOUT_SECONDS = 90
+LLM_PRECACHE_ON_START = os.getenv("LLM_PRECACHE_ON_START", "1") == "1"
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.modelarts-maas.com")
 LLM_API_PATH = os.getenv("LLM_API_PATH", DEFAULT_API_PATH)
@@ -41,6 +43,18 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
 with (ROOT / "questions.json").open("r", encoding="utf-8") as file:
     QUESTION_BANK = json.load(file)
 QUESTIONS_BY_TYPE = {question["type"]: question for question in QUESTION_BANK["questions"]}
+PRECACHE_LOCK = threading.Lock()
+PRECACHE_STATE = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "current": None,
+    "processed": 0,
+    "generated": 0,
+    "skipped": 0,
+    "failed": 0,
+    "last_error": None,
+}
 
 app = FastAPI(title="Ham Exam Trainer")
 
@@ -89,6 +103,13 @@ def one(query, params=()):
 def all_rows(query, params=()):
     with db() as connection:
         return connection.execute(query, params).fetchall()
+
+
+def llm_cache_count():
+    return one(
+        "SELECT COUNT(*) AS count FROM llm_cache WHERE model = ? AND prompt_version = ?",
+        (LLM_MODEL, PROMPT_VERSION),
+    )["count"]
 
 
 def hash_value(value):
@@ -283,9 +304,105 @@ def call_llm(question):
     return content.strip()
 
 
+def cached_explanation(question_type):
+    return one(
+        "SELECT content, created_at FROM llm_cache WHERE question_type = ? AND model = ? AND prompt_version = ?",
+        (question_type, LLM_MODEL, PROMPT_VERSION),
+    )
+
+
+def save_explanation(question_type, content):
+    created_at = utc_now().isoformat()
+    execute(
+        """
+        INSERT INTO llm_cache (question_type, model, prompt_version, content, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(question_type, model, prompt_version)
+        DO UPDATE SET content = excluded.content, created_at = excluded.created_at
+        """,
+        (question_type, LLM_MODEL, PROMPT_VERSION, content, created_at),
+    )
+    return created_at
+
+
+def precache_status():
+    with PRECACHE_LOCK:
+        status = dict(PRECACHE_STATE)
+    total = len(QUESTION_BANK["questions"])
+    cached = llm_cache_count()
+    status.update({
+        "enabled": LLM_PRECACHE_ON_START,
+        "configured": bool(LLM_API_KEY),
+        "model": LLM_MODEL,
+        "promptVersion": PROMPT_VERSION,
+        "total": total,
+        "cached": cached,
+        "remaining": max(total - cached, 0),
+    })
+    return status
+
+
+def update_precache_state(**values):
+    with PRECACHE_LOCK:
+        PRECACHE_STATE.update(values)
+
+
+def run_precache():
+    try:
+        for question in QUESTION_BANK["questions"]:
+            with PRECACHE_LOCK:
+                PRECACHE_STATE["current"] = question["type"]
+            if cached_explanation(question["type"]):
+                with PRECACHE_LOCK:
+                    PRECACHE_STATE["processed"] += 1
+                    PRECACHE_STATE["skipped"] += 1
+                continue
+            try:
+                content = call_llm(question)
+                save_explanation(question["type"], content)
+                with PRECACHE_LOCK:
+                    PRECACHE_STATE["generated"] += 1
+            except HTTPException as error:
+                with PRECACHE_LOCK:
+                    PRECACHE_STATE["failed"] += 1
+                    PRECACHE_STATE["last_error"] = str(error.detail)
+            except Exception as error:
+                with PRECACHE_LOCK:
+                    PRECACHE_STATE["failed"] += 1
+                    PRECACHE_STATE["last_error"] = str(error)
+            with PRECACHE_LOCK:
+                PRECACHE_STATE["processed"] += 1
+    finally:
+        update_precache_state(running=False, finished_at=utc_now().isoformat(), current=None)
+
+
+def start_precache():
+    if not LLM_API_KEY:
+        raise HTTPException(status_code=500, detail="Server missing LLM_API_KEY.")
+    with PRECACHE_LOCK:
+        if PRECACHE_STATE["running"]:
+            return False
+        PRECACHE_STATE.update({
+            "running": True,
+            "started_at": utc_now().isoformat(),
+            "finished_at": None,
+            "current": None,
+            "processed": 0,
+            "generated": 0,
+            "skipped": 0,
+            "failed": 0,
+            "last_error": None,
+        })
+        thread = threading.Thread(target=run_precache, daemon=True)
+        thread.start()
+    return True
+
+
 @app.on_event("startup")
 def startup():
     init_db()
+    if LLM_PRECACHE_ON_START and LLM_API_KEY and llm_cache_count() < len(QUESTION_BANK["questions"]):
+        start_precache()
 
 
 @app.get("/")
@@ -387,10 +504,7 @@ def explain(payload: ExplainPayload, user=Depends(current_user)):
     question = QUESTIONS_BY_TYPE.get(payload.question_type)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found.")
-    cached = one(
-        "SELECT content, created_at FROM llm_cache WHERE question_type = ? AND model = ? AND prompt_version = ?",
-        (payload.question_type, LLM_MODEL, PROMPT_VERSION),
-    )
+    cached = cached_explanation(payload.question_type)
     if cached and not payload.force:
         return {
             "cached": True,
@@ -399,17 +513,21 @@ def explain(payload: ExplainPayload, user=Depends(current_user)):
             "content": cached["content"],
         }
     content = call_llm(question)
-    created_at = utc_now().isoformat()
-    execute(
-        """
-        INSERT INTO llm_cache (question_type, model, prompt_version, content, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(question_type, model, prompt_version)
-        DO UPDATE SET content = excluded.content, created_at = excluded.created_at
-        """,
-        (payload.question_type, LLM_MODEL, PROMPT_VERSION, content, created_at),
-    )
+    created_at = save_explanation(payload.question_type, content)
     return {"cached": False, "model": LLM_MODEL, "generatedAt": created_at, "content": content}
+
+
+@app.get("/api/llm/precache")
+def get_precache(user=Depends(current_user)):
+    return precache_status()
+
+
+@app.post("/api/llm/precache")
+def post_precache(user=Depends(current_user)):
+    started = start_precache()
+    status = precache_status()
+    status["started"] = started
+    return status
 
 
 @app.get("/{path:path}")
