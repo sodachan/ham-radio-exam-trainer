@@ -56,6 +56,13 @@
           <h2 id="questionText"><span id="questionType" class="question-kind">单选</span><span id="questionTextContent">题库载入中</span></h2>
           <div id="options" class="options"></div>
           <div id="feedback" class="feedback" hidden></div>
+          <div class="actions">
+            <button id="submitBtn" type="button">提交答案</button>
+            <div class="nav-actions">
+              <button id="prevBtn" class="secondary" type="button">上一题</button>
+              <button id="nextBtn" class="secondary" type="button">下一题</button>
+            </div>
+          </div>
           <section class="ai-panel" aria-label="AI 解析">
             <div class="ai-panel-head">
               <div>
@@ -70,13 +77,6 @@
             <div id="aiStatus" class="ai-status" hidden></div>
             <div id="aiContent" class="ai-content empty">配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。</div>
           </section>
-          <div class="actions">
-            <button id="submitBtn" type="button">提交答案</button>
-            <div class="nav-actions">
-              <button id="prevBtn" class="secondary" type="button">上一题</button>
-              <button id="nextBtn" class="secondary" type="button">下一题</button>
-            </div>
-          </div>
         </article>
       </section>
 
