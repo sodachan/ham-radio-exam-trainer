@@ -410,6 +410,33 @@ input[type="text"] {
   margin-top: 10px;
 }
 
+.ai-content h4,
+.ai-content h5,
+.ai-content h6 {
+  margin: 12px 0 6px;
+  color: var(--text);
+  font-size: 16px;
+}
+
+.ai-content ul,
+.ai-content ol {
+  margin: 8px 0 8px 20px;
+  padding: 0;
+}
+
+.ai-content li + li {
+  margin-top: 4px;
+}
+
+.ai-content code {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #eef3f5;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
 .actions {
   display: grid;
   gap: 10px;
