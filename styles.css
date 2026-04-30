@@ -394,6 +394,10 @@ input[type="text"] {
   color: var(--primary-dark);
 }
 
+#cacheToolStatus.loading {
+  color: var(--primary-dark);
+}
+
 .ai-content {
   margin-top: 12px;
   border-top: 1px solid var(--line);
