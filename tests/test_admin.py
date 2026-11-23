@@ -84,3 +84,38 @@ class AdminTest(unittest.TestCase):
         self.assertIn("https://api.deepseek.com/chat/completions",urls)
         self.assertNotIn("private-test", self.admin.post("/api/admin/settings",headers=self.headers,
             json={"provider":"invalid","api_key":"private-test"}).text)
+
+    def test_manage_saved_models_and_provider_keys(self):
+        with llm.connect() as conn:
+            conn.execute("INSERT INTO profiles VALUES ('openai','old-private','old-model',1)")
+        path = "/api/admin/settings"
+        self.assertEqual(self.admin.get(path).json()["profiles"]["openai"]["models"], ["old-model"])
+        with patch.object(llm, "model_ids", return_value=["old-model", "new-model"]) as catalog:
+            def save(provider, model, key=None):
+                result = self.admin.post(path, headers=self.headers, json={
+                    "provider": provider, "model": model, "api_key": key})
+                self.assertEqual(result.status_code, 200, result.text)
+                return result.json()
+            save("openai", "new-model")
+            catalog.assert_called_with("openai", "old-private")
+            state = save("deepseek", "new-model", "other-private")
+            self.assertCountEqual(state["profiles"]["openai"]["models"], ["old-model", "new-model"])
+            target = {"provider": "openai", "model": "old-model"}
+            for client, expected in ((self.user, 403), (TestClient(server.app), 401)):
+                self.assertEqual(client.post(path + "/activate", headers=self.headers, json=target).status_code, expected)
+                self.assertEqual(client.delete(path + "/openai", headers=self.headers).status_code, expected)
+            self.assertEqual(self.admin.delete(path + "/openai").status_code, 403)
+            catalog.reset_mock()
+            result = self.admin.post(path + "/activate", headers=self.headers, json=target)
+            self.assertEqual((result.json()["active"], result.json()["model"]), ("openai", "old-model"))
+            catalog.assert_not_called()
+            catalog.return_value = ["new-model"]
+            state = save("openai", "new-model", "replacement-private")
+            self.assertEqual(state["profiles"]["openai"]["models"], ["new-model"])
+            self.assertEqual(self.admin.post(path + "/activate", headers=self.headers, json=target).status_code, 409)
+            state = self.admin.delete(path + "/openai", headers=self.headers)
+            self.assertEqual(state.json()["active"], "legacy")
+            self.assertNotIn("private", state.text)
+            self.assertEqual(set(llm.read_profiles()), {"deepseek"})
+            with llm.connect() as conn:
+                self.assertIsNone(conn.execute("SELECT model FROM saved_models WHERE provider='openai'").fetchone())

@@ -375,6 +375,14 @@ button.topic-row { color: var(--primary-dark); }
 .admin-grid input, .admin-grid select { width: 100%; }
 .settings-note { margin: 8px 0 14px; color: var(--muted); font-size: 15px; }
 .settings-note:empty { display: none; }
+#savedModels section { border-top: 1px solid var(--line); padding-block: 12px; }
+.provider-heading, .saved-model { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.saved-model { min-height: 44px; margin-top: 6px; }
+.saved-model span:last-child { color: var(--primary); white-space: nowrap; font-size: 15px; }
+.saved-model button, .provider-heading button { flex-shrink: 0; }
+.provider-heading button { color: var(--danger); }
+#editor { border-top: 1px solid var(--line); margin-top: 10px; }
+#editor summary { padding-block: 12px; color: var(--primary); font-weight: 600; }
 @media (max-width: 700px) {
   .admin-grid { grid-template-columns: minmax(0, 1fr); }
   .userbar:has(#adminLink:not([hidden])) #currentUserLabel { display: none; }

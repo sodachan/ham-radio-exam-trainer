@@ -13,14 +13,19 @@
         <section class="question-panel">
           <h2>解析模型</h2>
           <p id="activeModel" class="settings-note" role="status">正在读取当前配置…</p>
-          <fieldset id="settings" disabled>
-            <label>厂商<select id="provider"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label>
-            <label>API Key<input id="apiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="keyHint"></label>
-            <p id="keyHint" class="settings-note"></p>
-            <div><button id="refresh" class="secondary" type="button">刷新模型列表</button></div>
-            <label>模型<select id="model" disabled></select></label>
-            <div><button id="save" type="button" disabled>保存并启用</button></div>
-          </fieldset>
+          <h3>已保存的模型</h3>
+          <div id="savedModels"></div>
+          <details id="editor">
+            <summary>添加模型或更换密钥</summary>
+            <fieldset id="settings" disabled>
+              <label>厂商<select id="provider"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label>
+              <label>API Key<input id="apiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="keyHint"></label>
+              <p id="keyHint" class="settings-note"></p>
+              <div><button id="refresh" class="secondary" type="button">刷新模型列表</button></div>
+              <label>模型<select id="model" disabled></select></label>
+              <div><button id="save" type="button" disabled>保存并启用</button></div>
+            </fieldset>
+          </details>
           <p id="configStatus" class="settings-note" role="status"></p>
         </section>
         <section class="question-panel">

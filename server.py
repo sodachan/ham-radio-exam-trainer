@@ -506,6 +506,11 @@ class ModelRequest(BaseModel):
     api_key: Optional[SecretStr] = None
 
 
+class SavedModel(BaseModel):
+    provider: Provider
+    model: str
+
+
 class ModelSelection(ModelRequest):
     model: str
 
@@ -530,13 +535,18 @@ def admin_page(user=Depends(admin_user)):
     return page("admin.html")
 
 
+def settings_snapshot():
+    profiles = llm.read_profiles(include_models=True)
+    active = next((p for p, row in profiles.items() if row["active"]), "legacy")
+    return {"active": active, "model": LLM_MODEL if active == "legacy" else profiles[active]["model"],
+            "legacyConfigured": bool(LLM_API_KEY),
+            "profiles": {p: {"model": row["model"], "models": row["models"]} for p, row in profiles.items()}}
+
+
 @app.get("/api/admin/settings")
 def admin_settings(response: Response, user=Depends(admin_user)):
     response.headers["Cache-Control"] = "no-store"
-    profiles = llm.read_profiles()
-    active = next((p for p, row in profiles.items() if row["active"]), "legacy")
-    return {"active": active, "model": LLM_MODEL if active == "legacy" else profiles[active]["model"],
-            "profiles": {p: {"model": row["model"]} for p, row in profiles.items()}}
+    return settings_snapshot()
 
 
 @app.post("/api/admin/models")
@@ -547,10 +557,24 @@ def list_models(payload: ModelRequest, user=Depends(admin_write)):
 @app.post("/api/admin/settings")
 def set_model(payload: ModelSelection, user=Depends(admin_write)):
     key = provider_key(payload)
-    if payload.model not in llm.model_ids(payload.provider, key):
+    available = llm.model_ids(payload.provider, key)
+    if payload.model not in available:
         raise HTTPException(400, "请选择该密钥可用的模型。")
-    llm.activate(payload.provider, key, payload.model)
-    return {"active": payload.provider, "model": payload.model}
+    llm.activate(payload.provider, payload.model, key, available,
+                 reuse_key=not (payload.api_key and payload.api_key.get_secret_value().strip()))
+    return settings_snapshot()
+
+
+@app.post("/api/admin/settings/activate")
+def activate_saved_model(payload: SavedModel, user=Depends(admin_write)):
+    llm.activate(payload.provider, payload.model)
+    return settings_snapshot()
+
+
+@app.delete("/api/admin/settings/{provider}")
+def remove_provider(provider: Provider, user=Depends(admin_write)):
+    llm.delete_provider(provider)
+    return settings_snapshot()
 
 
 @app.post("/api/admin/invites")

@@ -26,11 +26,19 @@ class Config:
         return self.model if self.provider == "legacy" else f"{self.provider}:{self.model}"
 
 
-def read_profiles():
+def read_profiles(include_models=False):
     if not SETTINGS_PATH.exists():
         return {}
     with connect() as conn:
-        return {r["provider"]: dict(r) for r in conn.execute("SELECT * FROM profiles")}
+        conn.execute("BEGIN")
+        profiles = {r["provider"]: dict(r) for r in conn.execute("SELECT * FROM profiles")}
+        if include_models:
+            for profile in profiles.values():
+                profile["models"] = [profile["model"]]
+            for provider, model in conn.execute("SELECT provider, model FROM saved_models ORDER BY model"):
+                if model != profiles[provider]["model"]:
+                    profiles[provider]["models"].append(model)
+        return profiles
 
 
 def connect():
@@ -40,13 +48,36 @@ def connect():
     conn.row_factory = sqlite3.Row
     conn.execute("""CREATE TABLE IF NOT EXISTS profiles (
         provider TEXT PRIMARY KEY, key TEXT NOT NULL, model TEXT NOT NULL, active INTEGER NOT NULL)""")
+    conn.execute("""CREATE TABLE IF NOT EXISTS saved_models (
+        provider TEXT NOT NULL, model TEXT NOT NULL, PRIMARY KEY(provider, model))""")
     return conn
 
 
-def activate(provider, key, model):
+def activate(provider, model, key=None, available=None, reuse_key=False):
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        previous = conn.execute("SELECT key, model FROM profiles WHERE provider=?", (provider,)).fetchone()
+        if key is None:
+            if not previous or (model != previous["model"] and not conn.execute(
+                    "SELECT 1 FROM saved_models WHERE provider=? AND model=?", (provider, model)).fetchone()):
+                raise HTTPException(409, "该模型配置已更改，请刷新。")
+            key = previous["key"]
+        elif reuse_key and (not previous or key != previous["key"]):
+            raise HTTPException(409, "该密钥已更改，请刷新。")
+        if previous:
+            conn.execute("INSERT OR IGNORE INTO saved_models VALUES(?,?)", (provider, previous["model"]))
+        if previous and previous["key"] != key:
+            saved = conn.execute("SELECT model FROM saved_models WHERE provider=?", (provider,)).fetchall()
+            conn.executemany("DELETE FROM saved_models WHERE provider=? AND model=?",
+                             [(provider, row["model"]) for row in saved if row["model"] not in available])
         conn.execute("UPDATE profiles SET active=0 WHERE active=1")
         conn.execute("INSERT OR REPLACE INTO profiles VALUES(?,?,?,1)", (provider, key, model))
+
+
+def delete_provider(provider):
+    with connect() as conn:
+        conn.execute("DELETE FROM saved_models WHERE provider=?", (provider,))
+        conn.execute("DELETE FROM profiles WHERE provider=?", (provider,))
 
 
 def active_config(fallback):
