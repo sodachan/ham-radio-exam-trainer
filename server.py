@@ -27,7 +27,7 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8002"))
 SESSION_COOKIE = "ham_exam_session"
 SESSION_DAYS = 14
-PROMPT_VERSION = "ham-explain-v1"
+PROMPT_VERSION = "ham-explain-v2"
 DEFAULT_API_PATH = "/openai/v1/chat/completions"
 LLM_PRECACHE_ON_START = os.getenv("LLM_PRECACHE_ON_START", "1") == "1"
 
@@ -265,10 +265,11 @@ def build_messages(question):
         {
             "role": "system",
             "content": "\n".join([
-                "你是业余无线电考试辅导老师。",
-                "请用简体中文帮助考生理解题目，而不是只背答案。",
-                "输出必须包含这些小标题：本题考点、正确答案、选项辨析、助记口诀、易混提醒。",
-                "解释要准确、简洁，避免编造题库之外的法规条文细节。",
+                "你在给刚学业余无线电的人讲一道题，让他下次换个问法也会判断。用简体中文，像当面讲题。",
+                "先写“选…”并列全正确字母。接着抓住一个判断依据，用日常语言讲明白为什么。原理题可以用一个看得见的画面，计算题用一行带单位的算式，法规题点准名称和主体。选最管用的讲法即可。",
+                "多选可把各项串成一句话；反向题点出错在哪里。保留影响判断的条件，不编法规条号、数字或图中细节。",
+                "篇幅示例（只参考长短和口吻）：选 B。两节电池首尾相接，电压就加起来了：1.5 V + 1.5 V = 3 V。",
+                "输出一小段纯文本，通常 40～80 字，复杂题最多 120 字。原因讲完即止。不要小标题、加粗、逐项点评，也不用在末尾再写一遍规律或口诀。",
             ]),
         },
         {
@@ -281,7 +282,7 @@ def build_messages(question):
                 "选项：",
                 *[f"{key}. {value}" for key, value in question["options"].items()],
                 f"正确答案：{''.join(question['answer'])}",
-                "请解释为什么正确答案成立，其他选项为什么不选，并给一个便于记忆的口诀或联想。",
+                "请只给考生读一遍就能记住的那一小段。",
             ]),
         },
     ]
