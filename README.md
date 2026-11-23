@@ -44,3 +44,14 @@ export COOKIE_SECURE="1"
 部署到 HTTPS 域名后建议设置 `COOKIE_SECURE=1`。
 
 `LLM_PRECACHE_ON_START=1` 时，服务启动后会在后台按题目预生成 AI 解析并写入服务器缓存；没有配置 `LLM_API_KEY` 时不会启动。设置为 `0` 可关闭启动时预生成，登录后仍可在“进度”页手动启动。
+
+## 更新 A、B、C 题库
+
+导入工具使用 PyMuPDF。在包含三份分类题库和《总题库附图标记.pdf》的目录上运行：
+
+```bash
+python3 -m pip install PyMuPDF
+python3 tools/parse_pdf.py 20250809124154_2851 .
+```
+
+A 类使用 `questions.json`，B、C 类使用 `questions-B.json`、`questions-C.json`。三库共用 `figures/`。升级专项按原题号排除前置类别，学习记录按账号和类别独立保存。

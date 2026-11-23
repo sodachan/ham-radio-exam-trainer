@@ -2,161 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>业余无线电刷题 - 登录</title>
-    <style>
-      :root {
-        color-scheme: light;
-        --bg: #f4f6f8;
-        --panel: #ffffff;
-        --text: #1d2733;
-        --muted: #64717f;
-        --line: #d9e0e7;
-        --primary: #0f766e;
-        --primary-dark: #115e59;
-        --danger: #b42318;
-        --success: #067647;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--text);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        line-height: 1.5;
-      }
-
-      button,
-      input,
-      select {
-        font: inherit;
-      }
-
-      button {
-        min-height: 42px;
-        border: 0;
-        border-radius: 8px;
-        background: var(--primary);
-        color: #fff;
-        padding: 0 16px;
-        cursor: pointer;
-      }
-
-      button:hover {
-        background: var(--primary-dark);
-      }
-
-      button:disabled {
-        cursor: not-allowed;
-        opacity: 0.55;
-      }
-
-      .secondary {
-        background: #e7eef1;
-        color: var(--text);
-      }
-
-      .secondary:hover {
-        background: #dbe6e9;
-      }
-
-      .auth-shell {
-        width: min(560px, calc(100% - 28px));
-        min-height: 100vh;
-        margin: 0 auto;
-        display: grid;
-        align-items: center;
-        padding: 24px 0;
-      }
-
-      .auth-panel {
-        background: var(--panel);
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        padding: 24px;
-      }
-
-      .auth-panel h1 {
-        margin: 0 0 8px 0;
-        font-size: 28px;
-        font-weight: 600;
-      }
-
-      .auth-panel > p {
-        color: var(--muted);
-        margin: 8px 0 24px 0;
-      }
-
-      .auth-grid {
-        display: grid;
-        gap: 16px;
-        margin-bottom: 24px;
-      }
-
-      .auth-grid label {
-        display: grid;
-        gap: 6px;
-        font-weight: 500;
-      }
-
-      .auth-grid input {
-        padding: 10px 12px;
-        border: 1px solid var(--line);
-        border-radius: 6px;
-        font-size: 16px;
-      }
-
-      .auth-grid input:focus {
-        outline: none;
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
-      }
-
-      .auth-actions {
-        display: grid;
-        gap: 12px;
-      }
-
-      .auth-actions button {
-        width: 100%;
-      }
-
-      .ai-status {
-        margin-top: 16px;
-        padding: 12px;
-        border-radius: 6px;
-        text-align: center;
-        display: none;
-      }
-
-      .ai-status.loading {
-        display: block;
-        background: #e7eef1;
-        color: var(--muted);
-      }
-
-      .ai-status.error {
-        display: block;
-        background: #fceaea;
-        color: var(--danger);
-        border: 1px solid #f4a29c;
-      }
-
-      .ai-status.success {
-        display: block;
-        background: #ecf8f3;
-        color: var(--success);
-        border: 1px solid #a8d5ba;
-      }
-    </style>
+    <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <section class="auth-shell">
       <div class="auth-panel">
+        <span class="signal-mark" aria-hidden="true"></span>
         <h1>业余无线电刷题</h1>
         <p>登录后同步学习进度，并复用服务器缓存的 AI 解析。</p>
         <div class="auth-grid">
@@ -168,7 +21,7 @@
             密码
             <input id="authPassword" type="password" autocomplete="current-password" placeholder="至少6个字符">
           </label>
-          <label>
+          <label id="inviteField" hidden>
             邀请码
             <input id="authInvite" type="text" autocomplete="off" placeholder="首次注册时需填写">
           </label>
@@ -177,7 +30,7 @@
           <button id="loginBtn" type="button">登录</button>
           <button id="registerBtn" class="secondary" type="button">注册</button>
         </div>
-        <div id="authStatus" class="ai-status"></div>
+        <div role="status" id="authStatus" class="ai-status"></div>
       </div>
     </section>
 
@@ -213,11 +66,11 @@
       function toggleMode() {
         state.mode = state.mode === "login" ? "register" : "login";
         if (state.mode === "register") {
-          els.authInvite.style.display = "block";
+          document.getElementById("inviteField").hidden = false;
           els.loginBtn.textContent = "返回登录";
           els.registerBtn.textContent = "注册账号";
         } else {
-          els.authInvite.style.display = "none";
+          document.getElementById("inviteField").hidden = true;
           els.loginBtn.textContent = "登录";
           els.registerBtn.textContent = "注册";
         }

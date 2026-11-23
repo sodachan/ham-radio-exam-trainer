@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from pypdf import PdfReader
+import fitz  # PyMuPDF, used only when importing the PDF sources.
 
 
 TAG_RE = re.compile(r"(?m)^\[([A-Z])\]")
@@ -12,12 +12,17 @@ FIELD_RE = re.compile(r"^\[([A-Z])\]")
 
 
 def normalize(text):
-    return re.sub(r"[ \t]+", " ", text.strip())
+    # Keep word separators in Latin text without inserting spaces inside Chinese words.
+    text = re.sub(r"(?<=[a-zA-Z])\n+(?=[a-zA-Z])", " ", text)
+    return re.sub(r"[ \t]+", " ", text.replace("\n", "").strip())
 
 
 def read_pdf(path):
-    reader = PdfReader(path)
-    return "\n".join(page.extract_text() or "" for page in reader.pages)
+    with fitz.open(path) as pdf:
+        return "\n".join(
+            block[4] for page in pdf for block in page.get_text("blocks")
+            if not (block[1] > page.rect.height * .9 and block[4].strip() == str(page.number + 1))
+        )
 
 
 def parse_blocks(text):
@@ -57,6 +62,7 @@ def parse_block(block):
         "answer": answer,
         "options": options,
         "multi": len(answer) > 1,
+        **({"figure": fields["F"]} if "F" in fields else {}),
     }
 
 
@@ -87,32 +93,79 @@ def validate(questions):
     return problems
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Parse amateur radio exam PDF into JSON.")
-    parser.add_argument("pdf", type=Path)
-    parser.add_argument("output", type=Path)
-    args = parser.parse_args()
-
-    questions = [parse_block(block) for block in parse_blocks(read_pdf(args.pdf))]
+def read_bank(path):
+    questions = [parse_block(block) for block in parse_blocks(read_pdf(path))]
     problems = validate(questions)
-    if problems:
-        for problem in problems[:20]:
-            print(problem)
-        raise SystemExit(f"Validation failed with {len(problems)} problem(s).")
-
-    payload = {
-        "title": "业余无线电题库",
-        "source": str(args.pdf),
+    if not questions or problems:
+        raise ValueError(f"{path.name}: invalid question bank {problems[:5]}")
+    return {
+        "title": path.stem,
+        "source": path.name,
         "count": len(questions),
-        "categories": sorted({question["category"] for question in questions}),
+        "categories": sorted({q["category"] for q in questions}),
         "questions": questions,
     }
-    json_text = json.dumps(payload, ensure_ascii=False, indent=2)
-    args.output.write_text(json_text, encoding="utf-8")
-    if args.output.suffix == ".json":
-        js_output = args.output.with_suffix(".js")
-        js_output.write_text(f"window.QUESTION_BANK = {json_text};\n", encoding="utf-8")
-    print(f"Wrote {len(questions)} questions to {args.output}")
+
+
+def write_bank(payload, path, legacy_js=False):
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.write_text(text + "\n", encoding="utf-8")
+    if legacy_js:
+        path.with_suffix(".js").write_text(f"window.QUESTION_BANK = {text};\n", encoding="utf-8")
+
+
+def extract_figures(path, expected):
+    figures = {}
+    with fitz.open(path) as pdf:
+        for page in pdf:
+            images = page.get_image_info(xrefs=True)
+            for left, top, right, _, label, *_ in page.get_text("words"):
+                # Printed as LK060 between LK0602 and LK0604: the high-pass circuit in LK0603.
+                name = ("LK0603" if label == "LK060" else label) + ".jpg"
+                center = (left + right) / 2
+                matches = [im for im in images if im["bbox"][0] <= center <= im["bbox"][2]
+                           and 0 <= top - im["bbox"][3] < 18]
+                if len(matches) != 1 or name in figures:
+                    raise ValueError(f"Ambiguous figure {name} on page {page.number + 1}")
+                image = pdf.extract_image(matches[0]["xref"])
+                if image["ext"] != "jpeg":
+                    raise ValueError(f"Unexpected image format for {name}")
+                figures[name] = image["image"]
+    if figures.keys() != expected:
+        raise ValueError(f"Figure references differ: {figures.keys() ^ expected}")
+    return figures
+
+
+def import_banks(source, output):
+    banks = {}
+    previous = set()
+    expected = set()
+    for level in "ABC":
+        bank = read_bank(source / f"{level}类题库.pdf")
+        ids = [q["type"] for q in bank["questions"]]
+        bank["upgradeIds"] = [i for i in ids if i not in previous] if previous else []
+        previous.update(ids)
+        expected.update(q["figure"] for q in bank["questions"] if "figure" in q)
+        banks[level] = bank
+    figures = extract_figures(source / "总题库附图标记.pdf", expected)
+    (output / "figures").mkdir(parents=True, exist_ok=True)
+    for name, data in figures.items():
+        (output / "figures" / name).write_bytes(data)
+    for level, bank in banks.items():
+        name = "questions.json" if level == "A" else f"questions-{level}.json"
+        write_bank(bank, output / name, legacy_js=level == "A")
+        print(f"{level}: {bank['count']} questions, {len(bank['upgradeIds'])} upgrade questions")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Import a bank PDF or the complete A/B/C PDF directory.")
+    parser.add_argument("source", type=Path)
+    parser.add_argument("output", type=Path)
+    args = parser.parse_args()
+    if args.source.is_dir():
+        import_banks(args.source, args.output)
+    else:
+        write_bank(read_bank(args.source), args.output, legacy_js=args.output.suffix == ".json")
 
 
 if __name__ == "__main__":

@@ -2,16 +2,27 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>业余无线电刷题</title>
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
     <main id="appShell" class="shell">
       <header class="topbar">
-        <div>
-          <h1>业余无线电刷题</h1>
-          <p id="subtitle">正在载入题库...</p>
+        <div class="brand">
+          <span class="signal-mark" aria-hidden="true"></span>
+          <div>
+            <div class="brand-heading">
+              <h1>业余无线电刷题</h1>
+              <select id="bankSelect" aria-label="选择题库类别" disabled>
+                <option value="" hidden>题库</option>
+                <option value="A">A 类</option>
+                <option value="B">B 类</option>
+                <option value="C">C 类</option>
+              </select>
+            </div>
+            <p><span id="subtitle">正在载入题库...</span> <span id="scopeLabel" hidden></span></p>
+          </div>
         </div>
         <div class="stats" aria-label="学习统计">
           <div><strong id="statAnswered">0</strong><span>已答</span></div>
@@ -24,27 +35,35 @@
         </div>
       </header>
 
+      <p id="bankStatus" role="status"></p>
       <section class="toolbar" aria-label="刷题控制">
-        <div class="tabs" role="tablist" aria-label="模式">
-          <button class="tab active" data-mode="practice" type="button">刷题</button>
+        <nav class="tabs" aria-label="学习模式">
+          <button class="tab active" aria-current="page" data-mode="practice" type="button">刷题</button>
           <button class="tab" data-mode="wrong" type="button">错题本</button>
           <button class="tab" data-mode="exam" type="button">模拟考试</button>
           <button class="tab" data-mode="stats" type="button">进度</button>
-        </div>
-        <div class="filters">
-          <label>
-            知识点
-            <select id="categorySelect"></select>
-          </label>
-          <label>
-            顺序
-            <select id="orderSelect">
-              <option value="sequential">顺序</option>
-              <option value="random">随机</option>
-            </select>
-          </label>
-          <button id="resetProgressBtn" class="ghost" type="button">清空进度</button>
-        </div>
+        </nav>
+        <details class="filter-menu">
+          <summary>筛选</summary>
+          <div class="filters">
+            <label id="scopeField" hidden>
+              练习范围
+              <select id="scopeSelect"></select>
+            </label>
+            <label>
+              知识点
+              <select id="categorySelect"></select>
+            </label>
+            <label>
+              顺序
+              <select id="orderSelect">
+                <option value="sequential">顺序</option>
+                <option value="random">随机</option>
+              </select>
+            </label>
+            <button id="resetProgressBtn" class="ghost" type="button">清空进度</button>
+          </div>
+        </details>
       </section>
 
       <section id="practiceView" class="view active" aria-live="polite">
@@ -52,8 +71,10 @@
           <div class="question-meta">
             <button id="questionCounter" class="meta-pill" type="button">第 0 / 0 题</button>
             <button id="questionCategory" class="meta-pill" type="button">知识点 -</button>
+            <button id="openAiBtn" class="secondary" type="button" aria-haspopup="dialog" aria-controls="aiDialog" disabled>AI 解析</button>
           </div>
           <h2 id="questionText"><span id="questionType" class="question-kind">单选</span><span id="questionTextContent">题库载入中</span></h2>
+          <div id="practiceFigure"></div>
           <div id="options" class="options"></div>
           <div id="feedback" class="feedback" hidden></div>
           <div class="actions">
@@ -63,20 +84,6 @@
               <button id="nextBtn" class="secondary" type="button">下一题</button>
             </div>
           </div>
-          <section class="ai-panel" aria-label="AI 解析">
-            <div class="ai-panel-head">
-              <div>
-                <h3>AI 解析</h3>
-                <p id="aiCacheInfo">未生成</p>
-              </div>
-              <div class="ai-actions">
-                <button id="generateAiBtn" type="button">生成解析</button>
-                <button id="regenerateAiBtn" class="ghost" type="button" hidden>重新生成</button>
-              </div>
-            </div>
-            <div id="aiStatus" class="ai-status" hidden></div>
-            <div id="aiContent" class="ai-content empty">配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。</div>
-          </section>
         </article>
       </section>
 
@@ -105,15 +112,32 @@
         <div class="section-head">
           <h2>知识点进度</h2>
         </div>
+        <div id="categoryStats" class="topic-tree"></div>
         <div class="cache-tools">
           <span id="cacheToolStatus">AI 解析由服务器按题目缓存，多用户可复用同一题解析。</span>
           <button id="startPrecacheBtn" class="secondary" type="button">后台预生成解析</button>
         </div>
-        <div id="categoryStats" class="category-grid"></div>
       </section>
     </main>
 
-    <dialog id="jumpDialog" class="jump-dialog">
+    <dialog id="aiDialog" class="ai-dialog" aria-labelledby="aiHeading">
+      <header class="ai-panel-head">
+        <div>
+          <h2 id="aiHeading">AI 解析</h2>
+          <p id="aiQuestionInfo"></p>
+        </div>
+        <form method="dialog"><button class="ghost" autofocus>关闭</button></form>
+      </header>
+      <div class="ai-reader" tabindex="0" role="region" aria-label="解析正文">
+        <div id="aiStatus" class="ai-status" role="status" hidden></div>
+        <div id="aiContent" class="ai-content"></div>
+        <p id="aiCacheInfo"></p>
+        <button id="generateAiBtn" class="secondary" type="button" hidden>重试</button>
+        <button id="regenerateAiBtn" class="ghost" type="button" hidden>重新生成</button>
+      </div>
+    </dialog>
+
+    <dialog aria-labelledby="jumpTitle" id="jumpDialog" class="jump-dialog">
       <div class="jump-head">
         <div>
           <h2 id="jumpTitle">跳转</h2>
@@ -124,7 +148,7 @@
       <div id="jumpGrid" class="jump-grid"></div>
     </dialog>
 
-    <script src="/questions.js"></script>
+    <script src="/topic-titles.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

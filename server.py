@@ -9,7 +9,7 @@ import ssl
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -40,9 +40,12 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v3.2")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_urlsafe(32))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
 
-with (ROOT / "questions.json").open("r", encoding="utf-8") as file:
-    QUESTION_BANK = json.load(file)
-QUESTIONS_BY_TYPE = {question["type"]: question for question in QUESTION_BANK["questions"]}
+Bank = Literal["A", "B", "C"]
+QUESTIONS_BY_TYPE = {}
+for filename in ("questions.json", "questions-B.json", "questions-C.json"):
+    with (ROOT / filename).open(encoding="utf-8") as file:
+        for question in json.load(file)["questions"]:
+            QUESTIONS_BY_TYPE.setdefault(question["type"], question)
 PRECACHE_LOCK = threading.Lock()
 PRECACHE_STATE = {
     "running": False,
@@ -156,13 +159,6 @@ def init_db():
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
 
-            CREATE TABLE IF NOT EXISTS progress (
-                user_id INTEGER PRIMARY KEY,
-                payload TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id)
-            );
-
             CREATE TABLE IF NOT EXISTS llm_cache (
                 question_type TEXT NOT NULL,
                 model TEXT NOT NULL,
@@ -173,6 +169,26 @@ def init_db():
             );
             """
         )
+        connection.execute("BEGIN IMMEDIATE")
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(progress)")}
+        legacy = bool(columns) and "bank" not in columns
+        if legacy:
+            connection.execute("ALTER TABLE progress RENAME TO progress_legacy")
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS progress (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                bank TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, bank)
+            )
+        """)
+        if legacy:
+            connection.execute("""
+                INSERT INTO progress (user_id, bank, payload, updated_at)
+                SELECT user_id, 'A', payload, updated_at FROM progress_legacy
+            """)
+            connection.execute("DROP TABLE progress_legacy")
         connection.commit()
 
     env_codes = [code.strip() for code in os.getenv("INVITE_CODES", "").split(",") if code.strip()]
@@ -328,7 +344,7 @@ def save_explanation(question_type, content):
 def precache_status():
     with PRECACHE_LOCK:
         status = dict(PRECACHE_STATE)
-    total = len(QUESTION_BANK["questions"])
+    total = len(QUESTIONS_BY_TYPE)
     cached = llm_cache_count()
     status.update({
         "enabled": LLM_PRECACHE_ON_START,
@@ -349,7 +365,7 @@ def update_precache_state(**values):
 
 def run_precache():
     try:
-        for question in QUESTION_BANK["questions"]:
+        for question in QUESTIONS_BY_TYPE.values():
             with PRECACHE_LOCK:
                 PRECACHE_STATE["current"] = question["type"]
             if cached_explanation(question["type"]):
@@ -401,7 +417,7 @@ def start_precache():
 @app.on_event("startup")
 def startup():
     init_db()
-    if LLM_PRECACHE_ON_START and LLM_API_KEY and llm_cache_count() < len(QUESTION_BANK["questions"]):
+    if LLM_PRECACHE_ON_START and LLM_API_KEY and llm_cache_count() < len(QUESTIONS_BY_TYPE):
         start_precache()
 
 
@@ -478,23 +494,23 @@ def me(user=Depends(current_user)):
 
 
 @app.get("/api/progress")
-def get_progress(user=Depends(current_user)):
-    row = one("SELECT payload FROM progress WHERE user_id = ?", (user["id"],))
+def get_progress(bank: Bank = "A", user=Depends(current_user)):
+    row = one("SELECT payload FROM progress WHERE user_id = ? AND bank = ?", (user["id"], bank))
     if not row:
         return {"answers": {}, "wrong": []}
     return json.loads(row["payload"])
 
 
 @app.put("/api/progress")
-def put_progress(payload: ProgressPayload, user=Depends(current_user)):
+def put_progress(payload: ProgressPayload, bank: Bank = "A", user=Depends(current_user)):
     data = {"answers": payload.answers, "wrong": payload.wrong}
     execute(
         """
-        INSERT INTO progress (user_id, payload, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(user_id) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
+        INSERT INTO progress (user_id, bank, payload, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, bank) DO UPDATE SET payload = excluded.payload, updated_at = excluded.updated_at
         """,
-        (user["id"], json.dumps(data, ensure_ascii=False), utc_now().isoformat()),
+        (user["id"], bank, json.dumps(data, ensure_ascii=False), utc_now().isoformat()),
     )
     return {"ok": True}
 

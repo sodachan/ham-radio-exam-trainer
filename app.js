@@ -1,6 +1,12 @@
 const STORAGE_KEY = "hamExamProgressV1";
 
+const bankFiles = { A: "/questions.json", B: "/questions-B.json", C: "/questions-C.json" };
+let switchVersion = 0;
+let pendingSave = Promise.resolve();
+
 const state = {
+  bank: null,
+  scoped: [],
   payload: null,
   questions: [],
   filtered: [],
@@ -10,6 +16,7 @@ const state = {
   exam: null,
   currentUser: null,
   llmCache: {},
+  pendingExplanations: new Set(),
   precacheTimer: null,
   progress: {
     answers: {},
@@ -26,29 +33,83 @@ async function init() {
   bindEvents();
 
   try {
-    state.payload = window.QUESTION_BANK || await fetchQuestionBank();
-    state.questions = state.payload.questions;
-    setupCategories();
-    // 获取当前用户信息
     state.currentUser = await fetchCurrentUser();
-    // 获取学习进度
-    state.progress = await fetchProgress();
-    applyFilter();
-    renderAll();
-    // 显示用户名
-    if (state.currentUser) {
-      els.currentUserLabel.textContent = `当前用户：${state.currentUser.username}`;
-      await refreshPrecacheStatus();
-      state.precacheTimer = setInterval(refreshPrecacheStatus, 10000);
+    if (!state.currentUser) {
+      location.replace("/");
+      return;
     }
+    els.currentUserLabel.textContent = state.currentUser.username;
+    els.bankSelect.disabled = false;
+    const saved = localStorage.getItem(bankPreferenceKey());
+    await switchBank(Object.hasOwn(bankFiles, saved) ? saved : "A");
+    await refreshPrecacheStatus();
+    state.precacheTimer = setInterval(refreshPrecacheStatus, 10000);
   } catch (error) {
     document.getElementById("subtitle").textContent = "题库载入失败，请刷新重试。";
     console.error(error);
   }
 }
 
-async function fetchQuestionBank() {
-  const response = await fetch("/questions.json");
+function bankPreferenceKey() {
+  return "hamExamBank:" + state.currentUser.username;
+}
+
+function setLearningControlsBusy(busy) {
+  document.querySelectorAll(".toolbar, .view").forEach(el => { el.inert = busy; });
+}
+
+async function switchBank(bank) {
+  if (!state.currentUser) return;
+  const version = ++switchVersion;
+  els.bankSelect.value = bank;
+  els.bankStatus.textContent = "";
+  if (bank === state.bank || (state.exam && !state.exam.submitted &&
+      !window.confirm("切换题库将结束当前未交卷的考试，确定切换吗？"))) {
+    els.bankSelect.value = state.bank;
+    setLearningControlsBusy(false);
+    return;
+  }
+  setLearningControlsBusy(true);
+  els.bankStatus.textContent = `正在载入 ${bank} 类…`;
+  try {
+    await pendingSave;
+    const [payload, progress] = await Promise.all([
+      fetchJson(bankFiles[bank]), fetchJson(`/api/progress?bank=${bank}`),
+    ]);
+    if (version !== switchVersion) return;
+    state.bank = bank;
+    state.payload = payload;
+    state.questions = payload.questions;
+    state.progress = progress;
+    state.exam = null;
+    els.examSetup.hidden = false;
+    els.examPaper.hidden = els.examResult.hidden = true;
+    els.examPaper.replaceChildren();
+    els.examResult.replaceChildren();
+    els.jumpDialog.close();
+    els.aiDialog.close();
+    els.orderSelect.value = "sequential";
+    els.scopeSelect.replaceChildren(new Option(`全部 ${bank} 类题（${payload.count}）`, "all"));
+    if (bank !== "A") els.scopeSelect.add(new Option(`${bank} 类新增题（${payload.upgradeIds.length}）`, "upgrade"));
+    updateScope();
+    els.resetProgressBtn.textContent = `清空 ${bank} 类进度`;
+    els.clearWrongBtn.textContent = `清空 ${bank} 类错题`;
+    renderAll();
+    els.bankStatus.textContent = "";
+    localStorage.setItem(bankPreferenceKey(), bank);
+  } catch (error) {
+    if (version === switchVersion) els.bankStatus.textContent = `${bank} 类载入失败，点击类别重试。`;
+  } finally {
+    if (version === switchVersion) {
+      els.bankSelect.value = state.bank || "";
+      setLearningControlsBusy(!state.bank);
+    }
+  }
+}
+
+async function fetchJson(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }
 
@@ -62,13 +123,6 @@ async function fetchCurrentUser() {
   }
 }
 
-async function fetchProgress() {
-  const response = await fetch("/api/progress");
-  if (!response.ok) return { answers: {}, wrong: [] };
-  return response.json();
-}
-
-
 async function logout() {
   await fetch("/api/auth/logout", { method: "POST" });
   // 退出登录，重定向回登录页
@@ -78,19 +132,26 @@ async function logout() {
 
 function bindElements() {
   [
+    "bankSelect", "scopeSelect", "scopeLabel", "scopeField", "bankStatus", "practiceFigure",
     "subtitle", "statAnswered", "statAccuracy", "statWrong", "categorySelect", "orderSelect",
     "resetProgressBtn", "questionCounter", "questionType", "questionCategory", "questionText", "questionTextContent",
     "options", "feedback", "prevBtn", "submitBtn", "nextBtn", "wrongList", "clearWrongBtn",
     "examCount", "startExamBtn", "examSetup", "examPaper", "examResult", "categoryStats",
     "jumpDialog", "jumpTitle", "jumpHint", "jumpGrid", "closeJumpBtn",
     "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
-    "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus", "startPrecacheBtn",
+    "openAiBtn", "aiDialog", "aiQuestionInfo", "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus", "startPrecacheBtn",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
   });
 }
 
 function bindEvents() {
+  setLearningControlsBusy(true);
+  els.bankSelect.addEventListener("change", () => switchBank(els.bankSelect.value));
+  els.scopeSelect.addEventListener("change", () => {
+    updateScope();
+    renderPractice();
+  });
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => setMode(button.dataset.mode));
   });
@@ -113,19 +174,47 @@ function bindEvents() {
   els.questionCategory.addEventListener("click", openCategoryJump);
   els.closeJumpBtn.addEventListener("click", closeJump);
   els.logoutBtn.addEventListener("click", logout);
+  els.openAiBtn.addEventListener("click", () => {
+    els.openAiBtn.focus({ preventScroll: true });
+    els.aiQuestionInfo.textContent = els.questionCounter.textContent + " · " + els.questionCategory.textContent;
+    els.aiDialog.showModal();
+    if (els.aiDialog.dataset.question !== state.filtered[state.currentIndex].type) {
+      els.aiDialog.dataset.question = state.filtered[state.currentIndex].type;
+      els.aiDialog.querySelector(".ai-reader").scrollTop = 0;
+    }
+    generateAiExplanation(false);
+  });
+  els.aiDialog.addEventListener("click", (event) => {
+    if (event.target !== els.aiDialog) return;
+    const bounds = els.aiDialog.getBoundingClientRect();
+    if (event.clientX < bounds.left || event.clientX > bounds.right ||
+        event.clientY < bounds.top || event.clientY > bounds.bottom) els.aiDialog.close();
+  });
   els.generateAiBtn.addEventListener("click", () => generateAiExplanation(false));
   els.regenerateAiBtn.addEventListener("click", () => generateAiExplanation(true));
   els.startPrecacheBtn.addEventListener("click", startPrecache);
 }
 
-function setupCategories() {
+function syncScopeLabel() {
+  els.scopeField.hidden = state.bank === "A" || state.mode !== "practice";
+  els.scopeLabel.hidden = els.scopeField.hidden || els.scopeSelect.value !== "upgrade";
+  els.scopeLabel.textContent = `${state.bank} 类新增题`;
+}
+
+function updateScope() {
+  const ids = new Set(state.payload.upgradeIds);
+  state.scoped = els.scopeSelect.value === "upgrade"
+    ? state.questions.filter(question => ids.has(question.type))
+    : state.questions;
+  syncScopeLabel();
   els.categorySelect.innerHTML = `<option value="all">全部知识点</option>`;
-  state.payload.categories.forEach((category) => {
+  [...new Set(state.scoped.map(q => q.category))].forEach((category) => {
     const option = document.createElement("option");
     option.value = category;
-    option.textContent = category;
+    option.textContent = topicLabel(category);
     els.categorySelect.append(option);
   });
+  applyFilter();
 }
 
 function loadProgress() {
@@ -135,13 +224,14 @@ function loadProgress() {
 }
 
 function saveProgress() {
-  fetch("/api/progress", {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(state.progress),
-  }).catch(() => {
-    setCacheToolStatus("进度保存失败，请刷新重试。", "error");
-  });
+  const bank = state.bank;
+  const body = JSON.stringify(state.progress);
+  pendingSave = pendingSave.then(async () => {
+    const response = await fetch(`/api/progress?bank=${bank}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body,
+    });
+    if (!response.ok) throw new Error("保存失败");
+  }).catch(() => { els.bankStatus.textContent = `${bank} 类学习进度保存失败。`; });
 }
 
 function loadJson(key, fallback) {
@@ -157,8 +247,8 @@ function loadJson(key, fallback) {
 function applyFilter() {
   const category = els.categorySelect.value;
   state.filtered = category === "all"
-    ? [...state.questions]
-    : state.questions.filter((question) => question.category === category);
+    ? [...state.scoped]
+    : state.scoped.filter((question) => question.category === category);
   if (els.orderSelect.value === "random") {
     shuffle(state.filtered);
   }
@@ -168,8 +258,12 @@ function applyFilter() {
 
 function setMode(mode) {
   state.mode = mode;
+  syncScopeLabel();
   document.querySelectorAll(".tab").forEach((button) => {
-    button.classList.toggle("active", button.dataset.mode === mode);
+    const active = button.dataset.mode === mode;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "page");
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll(".view").forEach((view) => view.classList.remove("active"));
   document.getElementById(`${mode}View`).classList.add("active");
@@ -187,20 +281,27 @@ function renderAll() {
 function renderHeader() {
   const answered = Object.keys(state.progress.answers).length;
   const correct = Object.values(state.progress.answers).filter((item) => item.correct).length;
-  els.subtitle.textContent = `${state.questions.length} 道题 · ${state.payload.categories.length} 个知识点 · 进度保存在本机浏览器`;
+  els.subtitle.textContent = `${state.questions.length} 道题 · ${state.payload.categories.length} 个知识点`;
   els.statAnswered.textContent = answered;
   els.statAccuracy.textContent = answered ? `${Math.round((correct / answered) * 100)}%` : "0%";
   els.statWrong.textContent = state.progress.wrong.length;
 }
 
+function figureHtml(question) {
+  return question?.figure
+    ? `<img class="question-figure" src="/figures/${encodeURIComponent(question.figure)}" alt="题目 ${escapeHtml(question.sourceId)} 附图">`
+    : "";
+}
+
 function renderPractice() {
   const question = state.filtered[state.currentIndex];
+  els.practiceFigure.innerHTML = figureHtml(question);
+  els.openAiBtn.disabled = !question;
   if (!question) {
     els.questionCounter.textContent = "第 0 / 0 题";
     els.questionType.textContent = "";
     els.questionTextContent.textContent = "没有符合筛选条件的题目";
     els.options.innerHTML = "";
-    renderAiPanel(null);
     return;
   }
 
@@ -218,14 +319,13 @@ function renderPractice() {
     label.className = "option";
     label.innerHTML = `
       <input name="practiceOption" type="${question.multi ? "checkbox" : "radio"}" value="${key}">
-      <span><strong>${key}.</strong> ${escapeHtml(text)}</span>
+      <strong class="option-key">${key}</strong><span>${escapeHtml(text)}</span>
     `;
     els.options.append(label);
   });
 
   els.prevBtn.disabled = state.currentIndex === 0;
   els.nextBtn.disabled = state.currentIndex >= state.filtered.length - 1;
-  renderAiPanel(question);
 }
 
 function submitPractice() {
@@ -241,6 +341,7 @@ function submitPractice() {
 
   const correct = sameAnswers(selected, question.answer);
   recordAnswer(question, selected, correct);
+  saveProgress();
   renderHeader();
   renderWrongList();
   renderStats();
@@ -248,6 +349,9 @@ function submitPractice() {
   if (correct && state.currentIndex < state.filtered.length - 1) {
     state.currentIndex += 1;
     renderPractice();
+    els.feedback.hidden = false;
+    els.feedback.className = "feedback success";
+    els.feedback.textContent = "上一题回答正确，已进入下一题。";
     return;
   }
 
@@ -273,7 +377,6 @@ function recordAnswer(question, selected, correct) {
     wrongSet.add(question.type);
   }
   state.progress.wrong = [...wrongSet];
-  saveProgress();
 }
 
 function markOptions(question, selected) {
@@ -290,30 +393,10 @@ function showFeedback(correct, message, question) {
   els.feedback.textContent = `${message} 正确答案：${question.answer.join("")}`;
 }
 
-function renderAiPanel(question) {
-  clearAiStatus();
-  if (!question) {
-    els.aiCacheInfo.textContent = "未生成";
-    els.aiContent.textContent = "没有可解析的题目。";
-    els.aiContent.className = "ai-content empty";
-    els.regenerateAiBtn.hidden = true;
-    return;
-  }
-
-  els.aiCacheInfo.textContent = "未生成";
-  els.aiContent.textContent = "配置 LLM 后，可以为当前题生成考点、选项辨析和助记口诀。";
-  els.aiContent.className = "ai-content empty";
-  els.generateAiBtn.textContent = "生成解析";
-  els.regenerateAiBtn.hidden = true;
-}
-
-function showAiExplanation(cached) {
-  const generatedAt = cached.generatedAt ? new Date(cached.generatedAt).toLocaleString() : "未知时间";
-  els.aiCacheInfo.textContent = `${cached.model || "未知模型"} · ${generatedAt}`;
-  els.aiContent.className = "ai-content";
-  els.aiContent.innerHTML = formatAiText(cached.content);
-  els.generateAiBtn.textContent = "查看缓存";
-  els.regenerateAiBtn.hidden = false;
+function showAiExplanation(result) {
+  els.aiContent.innerHTML = result ? formatAiText(result.content) : "";
+  const date = result?.generatedAt ? new Date(result.generatedAt).toLocaleString() : "";
+  els.aiCacheInfo.textContent = [result?.model, date].filter(Boolean).join(" · ");
 }
 
 function clearAiStatus() {
@@ -341,34 +424,33 @@ async function generateAiExplanation(force) {
   const question = state.filtered[state.currentIndex];
   if (!question) return;
 
-  const cached = state.llmCache[question.type];
-  if (cached && !force) {
-    clearAiStatus();
-    showAiExplanation(cached);
-    setAiStatus("已读取本地缓存解析。", "success");
-    return;
-  }
+  const key = question.type;
+  const cached = state.llmCache[key];
+  clearAiStatus();
+  els.generateAiBtn.hidden = true;
+  els.regenerateAiBtn.hidden = !cached;
+  showAiExplanation(cached);
+  els.regenerateAiBtn.disabled = state.pendingExplanations.has(key);
+  if (!force && cached && !els.regenerateAiBtn.disabled) return;
 
+  setAiStatus("正在读取或生成本题解析…", "loading");
+  els.regenerateAiBtn.disabled = true;
+  if (state.pendingExplanations.has(key)) return;
+  state.pendingExplanations.add(key);
   try {
-    els.generateAiBtn.disabled = true;
-    els.regenerateAiBtn.disabled = true;
-    setAiStatus("正在生成解析...", "loading");
     const result = await callLlm(question, force);
-    state.llmCache[question.type] = {
-      questionType: question.type,
-      sourceId: question.sourceId,
-      category: question.category,
-      model: result.model,
-      generatedAt: result.generatedAt,
-      content: result.content,
-    };
-    showAiExplanation(state.llmCache[question.type]);
-    setAiStatus(result.cached ? "已读取服务器缓存解析。" : "解析已生成并保存到服务器缓存。", "success");
+    state.llmCache[key] = result;
+    if (state.filtered[state.currentIndex]?.type !== key) return;
+    clearAiStatus();
+    showAiExplanation(result);
+    els.regenerateAiBtn.hidden = false;
   } catch (error) {
+    if (state.filtered[state.currentIndex]?.type !== key) return;
     setAiStatus(llmErrorMessage(error), "error");
+    els.generateAiBtn.hidden = Boolean(cached);
   } finally {
-    els.generateAiBtn.disabled = false;
-    els.regenerateAiBtn.disabled = false;
+    state.pendingExplanations.delete(key);
+    if (state.filtered[state.currentIndex]?.type === key) els.regenerateAiBtn.disabled = false;
   }
 }
 
@@ -564,18 +646,18 @@ function openCategoryJump() {
   const allButton = document.createElement("button");
   allButton.type = "button";
   allButton.className = "jump-card category-card-button";
-  allButton.innerHTML = `<strong>全部知识点</strong><span>${state.questions.length} 题</span>`;
+  allButton.innerHTML = `<strong>全部知识点</strong><span>${state.scoped.length} 题</span>`;
   allButton.addEventListener("click", () => jumpToCategory("all"));
   els.jumpGrid.append(allButton);
 
-  state.payload.categories.forEach((category) => {
-    const questions = state.questions.filter((question) => question.category === category);
+  [...els.categorySelect.options].slice(1).forEach(({ value: category }) => {
+    const questions = state.scoped.filter((question) => question.category === category);
     const answered = questions.filter((question) => state.progress.answers[question.type]).length;
     const wrong = questions.filter((question) => state.progress.answers[question.type] && !state.progress.answers[question.type].correct).length;
     const button = document.createElement("button");
     button.type = "button";
     button.className = `jump-card category-card-button ${wrong ? "status-wrong" : answered ? "status-correct" : "status-pending"}`;
-    button.innerHTML = `<strong>${category}</strong><span>${answered}/${questions.length} 已答</span>`;
+    button.innerHTML = `<strong>${escapeHtml(topicLabel(category))}</strong><span>${answered}/${questions.length} 已答</span>`;
     button.addEventListener("click", () => jumpToCategory(category));
     els.jumpGrid.append(button);
   });
@@ -588,8 +670,6 @@ function jumpToCategory(category) {
   applyFilter();
   closeJump();
   setMode("practice");
-  renderPractice();
-  renderStats();
 }
 
 function openJump() {
@@ -630,6 +710,7 @@ function renderWrongList() {
     item.className = "list-item";
     item.innerHTML = `
       <h3>${escapeHtml(question.question)}</h3>
+      ${figureHtml(question)}
       <p>知识点 ${question.category} · 正确答案 ${question.answer.join("")}</p>
       <button class="secondary" type="button">重刷这题</button>
     `;
@@ -639,6 +720,10 @@ function renderWrongList() {
 }
 
 function jumpToQuestion(question) {
+  if (!state.scoped.includes(question)) {
+    els.scopeSelect.value = "all";
+    updateScope();
+  }
   els.categorySelect.value = "all";
   els.orderSelect.value = "sequential";
   applyFilter();
@@ -680,11 +765,12 @@ function renderExamPaper() {
     article.className = "exam-question";
     article.innerHTML = `
       <h3>${index + 1}. ${escapeHtml(question.question)}</h3>
+      ${figureHtml(question)}
       <div class="exam-options">
         ${Object.entries(question.options).map(([key, text]) => `
           <label class="option">
             <input name="exam-${index}" type="${question.multi ? "checkbox" : "radio"}" value="${key}">
-            <span><strong>${key}.</strong> ${escapeHtml(text)}</span>
+            <strong class="option-key">${key}</strong><span>${escapeHtml(text)}</span>
           </label>
         `).join("")}
       </div>
@@ -708,6 +794,8 @@ function submitExam() {
     recordAnswer(question, selected, correct);
     return { question, selected, correct };
   });
+  state.exam.submitted = true;
+  saveProgress();
   const correctCount = rows.filter((row) => row.correct).length;
   els.examPaper.hidden = true;
   els.examResult.hidden = false;
@@ -719,6 +807,7 @@ function submitExam() {
       ${rows.filter((row) => !row.correct).map((row) => `
         <article class="list-item">
           <h3>${escapeHtml(row.question.question)}</h3>
+          ${figureHtml(row.question)}
           <p>你的答案：${row.selected.join("") || "未作答"} · 正确答案：${row.question.answer.join("")}</p>
         </article>
       `).join("") || `<p class="empty">本次没有错题。</p>`}
@@ -729,34 +818,76 @@ function submitExam() {
   renderStats();
 }
 
-function renderStats() {
-  const byCategory = new Map();
-  state.questions.forEach((question) => {
-    if (!byCategory.has(question.category)) {
-      byCategory.set(question.category, { total: 0, answered: 0, correct: 0 });
-    }
-    const row = byCategory.get(question.category);
-    row.total += 1;
-    const answer = state.progress.answers[question.type];
-    if (answer) {
-      row.answered += 1;
-      if (answer.correct) row.correct += 1;
-    }
-  });
+function topicLabel(code) {
+  return topicTitles[code] ? `${code} ${topicTitles[code]}` : code;
+}
 
-  els.categoryStats.innerHTML = "";
-  [...byCategory.entries()].forEach(([category, row]) => {
-    const percent = row.total ? Math.round((row.answered / row.total) * 100) : 0;
-    const accuracy = row.answered ? Math.round((row.correct / row.answered) * 100) : 0;
-    const card = document.createElement("article");
-    card.className = "category-card";
-    card.innerHTML = `
-      <strong>${category}</strong>
-      <span>${row.answered}/${row.total} 已答 · 正确率 ${accuracy}%</span>
-      <div class="meter" aria-label="${category} 进度"><div style="width:${percent}%"></div></div>
-    `;
-    els.categoryStats.append(card);
-  });
+function renderStats() {
+  if (state.mode !== "stats") return;
+  const tree = new Map();
+  for (const question of state.questions) {
+    const answer = state.progress.answers[question.type];
+    let children = tree;
+    let code = "";
+    for (const part of question.category.split(".")) {
+      code = code ? code + "." + part : part;
+      if (!children.has(code)) {
+        children.set(code, { code, total: 0, answered: 0, correct: 0, children: new Map() });
+      }
+      const node = children.get(code);
+      node.total++;
+      if (answer) {
+        node.answered++;
+        if (answer.correct) node.correct++;
+      }
+      children = node.children;
+    }
+  }
+
+  const container = els.categoryStats;
+  const expanded = new Set();
+  if (container.dataset.bank === state.bank) {
+    container.querySelectorAll("details[open]").forEach(el => expanded.add(el.dataset.code));
+  }
+  container.dataset.bank = state.bank;
+
+  function drawBranch(branch) {
+    const list = document.createElement("ul");
+    for (const node of branch.values()) {
+      const item = document.createElement("li");
+      const group = node.children.size > 0;
+      const row = document.createElement(group ? "summary" : "button");
+      const accuracy = node.answered ? Math.round(100 * node.correct / node.answered) + "%" : "—";
+      row.className = "topic-row";
+      row.innerHTML = `<strong>${escapeHtml(topicLabel(node.code))}</strong>
+        <span class="topic-count">${node.answered}/${node.total} 已答 · 正确率 ${accuracy}</span>
+        <progress max="${node.total}" value="${node.answered}" aria-label="答题进度"></progress>`;
+      if (group) {
+        const details = document.createElement("details");
+        details.dataset.code = node.code;
+        details.open = expanded.has(node.code);
+        details.append(row, drawBranch(node.children));
+        item.append(details);
+      } else {
+        row.type = "button";
+        row.setAttribute("aria-label", `练习 ${topicLabel(node.code)}，${node.answered}/${node.total} 已答，正确率 ${accuracy}`);
+        row.addEventListener("click", () => {
+          // The progress tree counts the full bank, including topics outside upgrade practice.
+          if (els.scopeSelect.value !== "all") {
+            els.scopeSelect.value = "all";
+            updateScope();
+          }
+          jumpToCategory(node.code);
+          els.questionCategory.focus();
+          els.questionText.scrollIntoView({ block: "nearest" });
+        });
+        item.append(row);
+      }
+      list.append(item);
+    }
+    return list;
+  }
+  container.replaceChildren(drawBranch(tree));
 }
 
 function sameAnswers(left, right) {
