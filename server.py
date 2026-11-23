@@ -16,7 +16,7 @@ from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, R
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel, SecretStr
 
 
@@ -42,7 +42,8 @@ ADMIN_USERNAME = os.getenv("HAM_ADMIN_USERNAME", "").strip() or None
 Provider = Literal["openai", "deepseek"]
 Bank = Literal["A", "B", "C"]
 BANK_FILES = ("questions.json", "questions-B.json", "questions-C.json")
-PUBLIC_FILES = {"app.js", "admin.js", "styles.css", "topic-titles.js", "questions.js", *BANK_FILES}
+PAGE_ASSETS = ("app.js", "admin.js", "styles.css", "topic-titles.js")
+PUBLIC_FILES = {*PAGE_ASSETS, "questions.js", *BANK_FILES}
 QUESTIONS_BY_TYPE = {}
 for filename in BANK_FILES:
     with (ROOT / filename).open(encoding="utf-8") as file:
@@ -396,17 +397,30 @@ def startup():
         start_precache()
 
 
+def page(name):
+    html = (ROOT / name).read_text(encoding="utf-8")
+    for asset in PAGE_ASSETS:
+        reference = f'"/{asset}"'
+        if reference in html:
+            path = ROOT / asset
+            if path.resolve() != path:
+                raise HTTPException(status_code=404)
+            version = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+            html = html.replace(reference, f'"/assets/{version}/{asset}"')
+    return HTMLResponse(html, headers={"Cache-Control": "private, no-store"})
+
+
 @app.get("/login.html", include_in_schema=False)
 @app.get("/")
 def login_page():
-    return FileResponse(ROOT / "login.html")
+    return page("login.html")
 
 
 @app.get("/index.html", include_in_schema=False)
 @app.get("/app")
 def app_index(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
     if not session_token:
-        return RedirectResponse(url="/", status_code=302)
+        return RedirectResponse(url="/", status_code=302, headers={"Cache-Control": "private, no-store"})
     token_hash = session_hash(session_token)
     row = one(
         """
@@ -418,8 +432,8 @@ def app_index(session_token: Optional[str] = Cookie(default=None, alias=SESSION_
         (token_hash,),
     )
     if not row or datetime.fromisoformat(row["expires_at"]) <= utc_now():
-        return RedirectResponse(url="/", status_code=302)
-    return FileResponse(ROOT / "index.html")
+        return RedirectResponse(url="/", status_code=302, headers={"Cache-Control": "private, no-store"})
+    return page("index.html")
 
 
 @app.post("/api/auth/register")
@@ -513,7 +527,7 @@ def provider_key(payload):
 
 @app.get("/admin")
 def admin_page(user=Depends(admin_user)):
-    return FileResponse(ROOT / "admin.html", headers={"Cache-Control": "no-store"})
+    return page("admin.html")
 
 
 @app.get("/api/admin/settings")
@@ -602,6 +616,20 @@ def post_precache(user=Depends(admin_write)):
     return status
 
 
+@app.get("/assets/{version}/{name}")
+def versioned_asset(version: str, name: str):
+    if name not in PAGE_ASSETS:
+        raise HTTPException(status_code=404)
+    path = ROOT / name
+    if path.resolve() != path or not path.is_file():
+        raise HTTPException(status_code=404)
+    content = path.read_bytes()
+    if version != hashlib.sha256(content).hexdigest()[:16]:
+        raise HTTPException(status_code=404)
+    media = "text/css" if name.endswith(".css") else "text/javascript"
+    return Response(content, media_type=media, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
 @app.get("/{path:path}")
 def static_file(path: str):
     if path not in PUBLIC_FILES:
@@ -609,7 +637,7 @@ def static_file(path: str):
     target = ROOT / path
     if target.resolve() != target or not target.is_file():
         raise HTTPException(status_code=404)
-    return FileResponse(target)
+    return FileResponse(target, headers={"Cache-Control": "no-cache"})
 
 
 if __name__ == "__main__":

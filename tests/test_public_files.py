@@ -1,3 +1,4 @@
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,23 @@ import server
 
 
 class PublicFilesTest(unittest.TestCase):
+    def test_stylesheet_url_changes_when_its_contents_change(self):
+        client = TestClient(server.app)
+        with tempfile.TemporaryDirectory() as directory, patch.object(server, "ROOT", Path(directory).resolve()):
+            (server.ROOT / "login.html").write_text('<link href="/styles.css">')
+            for content in (b"body { color: red }", b"body { color: teal }"):
+                (server.ROOT / "styles.css").write_bytes(content)
+                version = hashlib.sha256(content).hexdigest()[:16]
+                url = f"/assets/{version}/styles.css"
+                page = client.get("/")
+                self.assertIn("no-store", page.headers["cache-control"])
+                self.assertIn(f'href="{url}"', page.text)
+                asset = client.get(url)
+                self.assertEqual(asset.content, content)
+                self.assertIn("immutable", asset.headers["cache-control"])
+            self.assertEqual(client.get("/assets/incorrect/styles.css").status_code, 404)
+            self.assertEqual(client.get(f"/assets/{version}/login.html").status_code, 404)
+
     def test_only_published_assets_are_served(self):
         client = TestClient(server.app)
         for name in server.PUBLIC_FILES:
