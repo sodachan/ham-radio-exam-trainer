@@ -5,19 +5,19 @@ import json
 import os
 import secrets
 import sqlite3
-import ssl
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal, Optional
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+import llm_settings as llm
 
 import bcrypt
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
+from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Response, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 
 ROOT = Path(__file__).resolve().parent
@@ -29,7 +29,6 @@ SESSION_COOKIE = "ham_exam_session"
 SESSION_DAYS = 14
 PROMPT_VERSION = "ham-explain-v1"
 DEFAULT_API_PATH = "/openai/v1/chat/completions"
-TIMEOUT_SECONDS = 90
 LLM_PRECACHE_ON_START = os.getenv("LLM_PRECACHE_ON_START", "1") == "1"
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.modelarts-maas.com")
@@ -39,9 +38,11 @@ LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-v3.2")
 SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_urlsafe(32))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
 
+ADMIN_USERNAME = os.getenv("HAM_ADMIN_USERNAME", "").strip() or None
+Provider = Literal["openai", "deepseek"]
 Bank = Literal["A", "B", "C"]
 BANK_FILES = ("questions.json", "questions-B.json", "questions-C.json")
-PUBLIC_FILES = {"app.js", "styles.css", "topic-titles.js", "questions.js", *BANK_FILES}
+PUBLIC_FILES = {"app.js", "admin.js", "styles.css", "topic-titles.js", "questions.js", *BANK_FILES}
 QUESTIONS_BY_TYPE = {}
 for filename in BANK_FILES:
     with (ROOT / filename).open(encoding="utf-8") as file:
@@ -112,10 +113,10 @@ def all_rows(query, params=()):
         return connection.execute(query, params).fetchall()
 
 
-def llm_cache_count():
+def llm_cache_count(config):
     return one(
         "SELECT COUNT(*) AS count FROM llm_cache WHERE model = ? AND prompt_version = ?",
-        (LLM_MODEL, PROMPT_VERSION),
+        (config.cache_model, PROMPT_VERSION),
     )["count"]
 
 
@@ -285,53 +286,18 @@ def build_messages(question):
     ]
 
 
-def call_llm(question):
-    if not LLM_API_KEY:
-        raise HTTPException(status_code=500, detail="Server missing LLM_API_KEY.")
-    target = chat_completions_url()
-    parsed = urlparse(target)
-    if parsed.scheme != "https":
-        raise HTTPException(status_code=500, detail="LLM_BASE_URL must resolve to an https URL.")
-
-    body = json.dumps({
-        "model": LLM_MODEL,
-        "messages": build_messages(question),
-        "temperature": 0.2,
-        "max_tokens": 900,
-    }).encode("utf-8")
-    request = Request(
-        target,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {LLM_API_KEY}",
-        },
-        method="POST",
-    )
-    try:
-        context = ssl.create_default_context()
-        with urlopen(request, timeout=TIMEOUT_SECONDS, context=context) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        text = error.read().decode("utf-8", errors="replace")
-        raise HTTPException(status_code=error.code, detail=text or error.reason)
-    except URLError as error:
-        raise HTTPException(status_code=502, detail=f"Upstream request failed: {error.reason}")
-
-    content = payload.get("choices", [{}])[0].get("message", {}).get("content")
-    if not content:
-        raise HTTPException(status_code=502, detail="LLM response missing choices[0].message.content.")
-    return content.strip()
+def llm_config():
+    return llm.active_config(llm.Config("legacy", LLM_MODEL, LLM_API_KEY, chat_completions_url()))
 
 
-def cached_explanation(question_type):
+def cached_explanation(question_type, config):
     return one(
         "SELECT content, created_at FROM llm_cache WHERE question_type = ? AND model = ? AND prompt_version = ?",
-        (question_type, LLM_MODEL, PROMPT_VERSION),
+        (question_type, config.cache_model, PROMPT_VERSION),
     )
 
 
-def save_explanation(question_type, content):
+def save_explanation(question_type, content, config):
     created_at = utc_now().isoformat()
     execute(
         """
@@ -340,7 +306,7 @@ def save_explanation(question_type, content):
         ON CONFLICT(question_type, model, prompt_version)
         DO UPDATE SET content = excluded.content, created_at = excluded.created_at
         """,
-        (question_type, LLM_MODEL, PROMPT_VERSION, content, created_at),
+        (question_type, config.cache_model, PROMPT_VERSION, content, created_at),
     )
     return created_at
 
@@ -349,11 +315,12 @@ def precache_status():
     with PRECACHE_LOCK:
         status = dict(PRECACHE_STATE)
     total = len(QUESTIONS_BY_TYPE)
-    cached = llm_cache_count()
+    config = llm_config()
+    cached = llm_cache_count(config)
     status.update({
         "enabled": LLM_PRECACHE_ON_START,
-        "configured": bool(LLM_API_KEY),
-        "model": LLM_MODEL,
+        "configured": bool(config.key),
+        "model": config.model,
         "promptVersion": PROMPT_VERSION,
         "total": total,
         "cached": cached,
@@ -367,19 +334,21 @@ def update_precache_state(**values):
         PRECACHE_STATE.update(values)
 
 
-def run_precache():
+def run_precache(config):
     try:
         for question in QUESTIONS_BY_TYPE.values():
+            if llm_config() != config:
+                break
             with PRECACHE_LOCK:
                 PRECACHE_STATE["current"] = question["type"]
-            if cached_explanation(question["type"]):
+            if cached_explanation(question["type"], config):
                 with PRECACHE_LOCK:
                     PRECACHE_STATE["processed"] += 1
                     PRECACHE_STATE["skipped"] += 1
                 continue
             try:
-                content = call_llm(question)
-                save_explanation(question["type"], content)
+                content = llm.complete(config, build_messages(question))
+                save_explanation(question["type"], content, config)
                 with PRECACHE_LOCK:
                     PRECACHE_STATE["generated"] += 1
             except HTTPException as error:
@@ -397,7 +366,8 @@ def run_precache():
 
 
 def start_precache():
-    if not LLM_API_KEY:
+    config = llm_config()
+    if not config.key:
         raise HTTPException(status_code=500, detail="Server missing LLM_API_KEY.")
     with PRECACHE_LOCK:
         if PRECACHE_STATE["running"]:
@@ -413,7 +383,7 @@ def start_precache():
             "failed": 0,
             "last_error": None,
         })
-        thread = threading.Thread(target=run_precache, daemon=True)
+        thread = threading.Thread(target=run_precache, args=(config,), daemon=True)
         thread.start()
     return True
 
@@ -421,7 +391,8 @@ def start_precache():
 @app.on_event("startup")
 def startup():
     init_db()
-    if LLM_PRECACHE_ON_START and LLM_API_KEY and llm_cache_count() < len(QUESTIONS_BY_TYPE):
+    config = llm_config()
+    if LLM_PRECACHE_ON_START and config.key and llm_cache_count(config) < len(QUESTIONS_BY_TYPE):
         start_precache()
 
 
@@ -454,22 +425,27 @@ def app_index(session_token: Optional[str] = Cookie(default=None, alias=SESSION_
 @app.post("/api/auth/register")
 def register(payload: RegisterPayload, response: Response):
     username = payload.username.strip()
+    if username == ADMIN_USERNAME:
+        raise HTTPException(409, "该用户名已保留。")
     if len(username) < 3 or len(payload.password) < 6:
         raise HTTPException(status_code=400, detail="Username must be at least 3 chars and password at least 6 chars.")
-    invite = one("SELECT code_hash, used_by FROM invite_codes WHERE code_hash = ?", (hash_value(payload.invite_code.strip()),))
-    if not invite or invite["used_by"]:
-        raise HTTPException(status_code=400, detail="Invalid or used invite code.")
+    code_hash = hash_value(payload.invite_code.strip())
+    if not one("SELECT 1 FROM invite_codes WHERE code_hash = ? AND used_by IS NULL", (code_hash,)):
+        raise HTTPException(400, "邀请码无效或已使用。")
+    password_hash = hash_password(payload.password)
     try:
         with db() as connection:
             cursor = connection.execute(
                 "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-                (username, hash_password(payload.password), utc_now().isoformat()),
+                (username, password_hash, utc_now().isoformat()),
             )
             user_id = cursor.lastrowid
-            connection.execute(
-                "UPDATE invite_codes SET used_by = ?, used_at = ? WHERE code_hash = ?",
-                (user_id, utc_now().isoformat(), invite["code_hash"]),
+            consumed = connection.execute(
+                "UPDATE invite_codes SET used_by = ?, used_at = ? WHERE code_hash = ? AND used_by IS NULL",
+                (user_id, utc_now().isoformat(), code_hash),
             )
+            if consumed.rowcount != 1:
+                raise HTTPException(400, "邀请码无效或已使用。")
             connection.commit()
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Username already exists.")
@@ -496,7 +472,80 @@ def logout(response: Response, session_token: Optional[str] = Cookie(default=Non
 
 @app.get("/api/me")
 def me(user=Depends(current_user)):
-    return {"username": user["username"]}
+    return {"username": user["username"], "isAdmin": user["username"] == ADMIN_USERNAME}
+
+
+def admin_user(user=Depends(current_user)):
+    if user["username"] != ADMIN_USERNAME:
+        raise HTTPException(403, "需要管理员权限。")
+    return user
+
+
+def admin_write(user=Depends(admin_user), x_admin_request: Optional[str] = Header(default=None)):
+    if x_admin_request != "1":
+        raise HTTPException(403, "无效的管理请求。")
+    return user
+
+
+class ModelRequest(BaseModel):
+    provider: Provider
+    api_key: Optional[SecretStr] = None
+
+
+class ModelSelection(ModelRequest):
+    model: str
+
+
+@app.exception_handler(RequestValidationError)
+async def redact_admin_input(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/api/admin/"):
+        return JSONResponse(status_code=422, content={"detail": "管理请求参数无效。"})
+    return await request_validation_exception_handler(request, exc)
+
+
+def provider_key(payload):
+    supplied = payload.api_key.get_secret_value().strip() if payload.api_key else ""
+    key = supplied or llm.read_profiles().get(payload.provider, {}).get("key")
+    if not key:
+        raise HTTPException(400, "请先输入该厂商的 API Key。")
+    return key
+
+
+@app.get("/admin")
+def admin_page(user=Depends(admin_user)):
+    return FileResponse(ROOT / "admin.html", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/settings")
+def admin_settings(response: Response, user=Depends(admin_user)):
+    response.headers["Cache-Control"] = "no-store"
+    profiles = llm.read_profiles()
+    active = next((p for p, row in profiles.items() if row["active"]), "legacy")
+    return {"active": active, "model": LLM_MODEL if active == "legacy" else profiles[active]["model"],
+            "profiles": {p: {"model": row["model"]} for p, row in profiles.items()}}
+
+
+@app.post("/api/admin/models")
+def list_models(payload: ModelRequest, user=Depends(admin_write)):
+    return {"models": llm.model_ids(payload.provider, provider_key(payload))}
+
+
+@app.post("/api/admin/settings")
+def set_model(payload: ModelSelection, user=Depends(admin_write)):
+    key = provider_key(payload)
+    if payload.model not in llm.model_ids(payload.provider, key):
+        raise HTTPException(400, "请选择该密钥可用的模型。")
+    llm.activate(payload.provider, key, payload.model)
+    return {"active": payload.provider, "model": payload.model}
+
+
+@app.post("/api/admin/invites")
+def create_invite(response: Response, user=Depends(admin_write)):
+    code = "ham-" + secrets.token_urlsafe(24)
+    execute("INSERT INTO invite_codes (code_hash, created_at) VALUES (?, ?)",
+            (hash_value(code), utc_now().isoformat()))
+    response.headers["Cache-Control"] = "no-store"
+    return {"code": code}
 
 
 @app.get("/api/progress")
@@ -526,17 +575,18 @@ def explain(payload: ExplainPayload, user=Depends(current_user)):
     question = QUESTIONS_BY_TYPE.get(payload.question_type)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found.")
-    cached = cached_explanation(payload.question_type)
+    config = llm_config()
+    cached = cached_explanation(payload.question_type, config)
     if cached and not payload.force:
         return {
             "cached": True,
-            "model": LLM_MODEL,
+            "model": config.model,
             "generatedAt": cached["created_at"],
             "content": cached["content"],
         }
-    content = call_llm(question)
-    created_at = save_explanation(payload.question_type, content)
-    return {"cached": False, "model": LLM_MODEL, "generatedAt": created_at, "content": content}
+    content = llm.complete(config, build_messages(question))
+    created_at = save_explanation(payload.question_type, content, config)
+    return {"cached": False, "model": config.model, "generatedAt": created_at, "content": content}
 
 
 @app.get("/api/llm/precache")
@@ -545,7 +595,7 @@ def get_precache(user=Depends(current_user)):
 
 
 @app.post("/api/llm/precache")
-def post_precache(user=Depends(current_user)):
+def post_precache(user=Depends(admin_write)):
     started = start_precache()
     status = precache_status()
     status["started"] = started

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>站点管理 · 业余无线电刷题</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell admin-shell">
+      <header class="section-head"><h1>站点管理</h1><a class="admin-link" href="/app">返回刷题</a></header>
+      <div class="admin-grid">
+        <section class="question-panel">
+          <h2>解析模型</h2>
+          <p id="activeModel" class="settings-note" role="status">正在读取当前配置…</p>
+          <fieldset id="settings" disabled>
+            <label>厂商<select id="provider"><option value="openai">OpenAI</option><option value="deepseek">DeepSeek</option></select></label>
+            <label>API Key<input id="apiKey" type="password" autocomplete="off" spellcheck="false" autocapitalize="none" aria-describedby="keyHint"></label>
+            <p id="keyHint" class="settings-note"></p>
+            <div><button id="refresh" class="secondary" type="button">刷新模型列表</button></div>
+            <label>模型<select id="model" disabled></select></label>
+            <div><button id="save" type="button" disabled>保存并启用</button></div>
+          </fieldset>
+          <p id="configStatus" class="settings-note" role="status"></p>
+        </section>
+        <section class="question-panel">
+          <h2>注册邀请码</h2>
+          <p class="settings-note">每个邀请码可注册一个普通账号。生成后请复制保存。</p>
+          <button id="invite" type="button">生成邀请码</button>
+          <div id="inviteResult" hidden>
+            <label>新邀请码<input id="code" type="text" readonly></label>
+            <button id="copy" type="button" class="secondary">复制邀请码</button>
+          </div>
+          <p id="inviteStatus" class="settings-note" role="status"></p>
+        </section>
+      </div>
+    </main>
+    <script src="/admin.js"></script>
+  </body>
+</html>

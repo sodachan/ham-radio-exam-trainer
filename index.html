@@ -31,6 +31,7 @@
         </div>
         <div class="userbar">
           <span id="currentUserLabel"></span>
+          <a id="adminLink" class="admin-link" href="/admin" hidden>管理</a>
           <button id="logoutBtn" class="ghost" type="button">退出</button>
         </div>
       </header>
@@ -115,7 +116,7 @@
         <div id="categoryStats" class="topic-tree"></div>
         <div class="cache-tools">
           <span id="cacheToolStatus">AI 解析由服务器按题目缓存，多用户可复用同一题解析。</span>
-          <button id="startPrecacheBtn" class="secondary" type="button">后台预生成解析</button>
+          <button id="startPrecacheBtn" hidden class="secondary" type="button">后台预生成解析</button>
         </div>
       </section>
     </main>

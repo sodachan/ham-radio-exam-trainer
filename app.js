@@ -15,7 +15,6 @@ const state = {
   submitted: false,
   exam: null,
   currentUser: null,
-  llmCache: {},
   pendingExplanations: new Set(),
   precacheTimer: null,
   progress: {
@@ -39,6 +38,8 @@ async function init() {
       return;
     }
     els.currentUserLabel.textContent = state.currentUser.username;
+    document.getElementById("adminLink").hidden = !state.currentUser.isAdmin;
+    els.startPrecacheBtn.hidden = !state.currentUser.isAdmin;
     els.bankSelect.disabled = false;
     const saved = localStorage.getItem(bankPreferenceKey());
     await switchBank(Object.hasOwn(bankFiles, saved) ? saved : "A");
@@ -425,13 +426,12 @@ async function generateAiExplanation(force) {
   if (!question) return;
 
   const key = question.type;
-  const cached = state.llmCache[key];
   clearAiStatus();
   els.generateAiBtn.hidden = true;
-  els.regenerateAiBtn.hidden = !cached;
-  showAiExplanation(cached);
-  els.regenerateAiBtn.disabled = state.pendingExplanations.has(key);
-  if (!force && cached && !els.regenerateAiBtn.disabled) return;
+  if (!force) {
+    els.regenerateAiBtn.hidden = true;
+    showAiExplanation(null);
+  }
 
   setAiStatus("正在读取或生成本题解析…", "loading");
   els.regenerateAiBtn.disabled = true;
@@ -439,7 +439,6 @@ async function generateAiExplanation(force) {
   state.pendingExplanations.add(key);
   try {
     const result = await callLlm(question, force);
-    state.llmCache[key] = result;
     if (state.filtered[state.currentIndex]?.type !== key) return;
     clearAiStatus();
     showAiExplanation(result);
@@ -447,7 +446,7 @@ async function generateAiExplanation(force) {
   } catch (error) {
     if (state.filtered[state.currentIndex]?.type !== key) return;
     setAiStatus(llmErrorMessage(error), "error");
-    els.generateAiBtn.hidden = Boolean(cached);
+    els.generateAiBtn.hidden = false;
   } finally {
     state.pendingExplanations.delete(key);
     if (state.filtered[state.currentIndex]?.type === key) els.regenerateAiBtn.disabled = false;
@@ -575,7 +574,7 @@ async function startPrecache() {
   try {
     els.startPrecacheBtn.disabled = true;
     setCacheToolStatus("正在启动后台预生成任务...", "loading");
-    const response = await fetch("/api/llm/precache", { method: "POST" });
+    const response = await fetch("/api/llm/precache", { method: "POST", headers: { "X-Admin-Request": "1" } });
     const status = await parseJsonResponse(response);
     if (!response.ok) throw new Error(status?.detail || `${response.status} ${response.statusText}`);
     renderPrecacheStatus(status);
