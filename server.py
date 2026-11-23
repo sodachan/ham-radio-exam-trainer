@@ -27,7 +27,7 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8002"))
 SESSION_COOKIE = "ham_exam_session"
 SESSION_DAYS = 14
-PROMPT_VERSION = "ham-explain-v3"
+PROMPT_VERSION = "ham-explain-v4"
 DEFAULT_API_PATH = "/openai/v1/chat/completions"
 LLM_PRECACHE_ON_START = os.getenv("LLM_PRECACHE_ON_START", "1") == "1"
 
@@ -269,6 +269,8 @@ def build_messages(question):
                 "按题目需要展开：原理题讲清因果，必要时用一个小例子；计算题说明为什么用这个公式，再代入题中数值，保留单位；法规或事实题讲清所问的名称、主体、职责或适用条件，不编条文、历史原因或未提供的图示细节。",
                 "多选题说明每个正确项为什么成立，可合并同一原理；问错误或例外时，指出哪句话违背了什么规则。挑与正确答案最容易混淆的实际选项，具体说明它错在哪一步或哪个词；没有值得比较的选项就略过。",
                 "写成一至三个短段，通常 120～200 字。给必要的推理留足空间；要缩短时，先删重复结论、额外举例和口号。直接从题目切入，不抄整道题或整组选项。",
+                "排版：首行写成“**答案：A、C**”（字母按本题填写），单独成段。空一行写 Markdown 标题“# 题目分析”，换行讲解。若有具体易错项，另起“# 易错点”一节。标题和正文分行，各段间空一行。",
+                "计算题把关键算式独立成段，用 ×、÷、≈ 和普通单位，不用 LaTeX、表格或代码块。除答案外不整句加粗。",
             ]),
         },
         {

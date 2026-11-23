@@ -519,7 +519,7 @@ function formatAiText(text) {
     if (heading) {
       flushParagraph();
       closeList();
-      const level = Math.min(heading[1].length + 3, 6);
+      const level = Math.min(heading[1].length + 2, 6);
       html.push(`<h${level}>${formatInlineMarkdown(heading[2])}</h${level}>`);
       return;
     }

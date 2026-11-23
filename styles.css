@@ -237,7 +237,7 @@ html:has(.ai-dialog[open]) { overflow: hidden; }
 #aiCacheInfo { margin: 14px 0; color: var(--muted); }
 #aiCacheInfo:empty { display: none; }
 .ai-content p + p, .list-item button { margin-top: 10px; }
-.ai-content h4, .ai-content h5, .ai-content h6 { margin: .8em 0 .3em; font-size: 1.1em; }
+.ai-content :is(h3, h4, h5, h6) { margin: 1em 0 .25em; color: var(--primary-dark); font-size: 1.05em; }
 .ai-content ol, .ai-content ul { padding-left: 1.5em; }
 .ai-content code { background: var(--bg); padding: 1px 4px; border-radius: 3px; }
 .ai-status, .feedback { margin-top: 14px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
