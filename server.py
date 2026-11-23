@@ -16,7 +16,6 @@ from urllib.request import Request, urlopen
 
 import bcrypt
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Response
-from fastapi.responses import FileResponse
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -41,11 +40,16 @@ SESSION_SECRET = os.getenv("SESSION_SECRET", secrets.token_urlsafe(32))
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "0") == "1"
 
 Bank = Literal["A", "B", "C"]
+BANK_FILES = ("questions.json", "questions-B.json", "questions-C.json")
+PUBLIC_FILES = {"app.js", "styles.css", "topic-titles.js", "questions.js", *BANK_FILES}
 QUESTIONS_BY_TYPE = {}
-for filename in ("questions.json", "questions-B.json", "questions-C.json"):
+for filename in BANK_FILES:
     with (ROOT / filename).open(encoding="utf-8") as file:
         for question in json.load(file)["questions"]:
             QUESTIONS_BY_TYPE.setdefault(question["type"], question)
+            figure = question.get("figure")
+            if figure and Path(figure).name == figure and figure.endswith(".jpg"):
+                PUBLIC_FILES.add("figures/" + figure)
 PRECACHE_LOCK = threading.Lock()
 PRECACHE_STATE = {
     "running": False,
@@ -421,11 +425,13 @@ def startup():
         start_precache()
 
 
+@app.get("/login.html", include_in_schema=False)
 @app.get("/")
 def login_page():
     return FileResponse(ROOT / "login.html")
 
 
+@app.get("/index.html", include_in_schema=False)
 @app.get("/app")
 def app_index(session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE)):
     if not session_token:
@@ -548,9 +554,11 @@ def post_precache(user=Depends(current_user)):
 
 @app.get("/{path:path}")
 def static_file(path: str):
-    target = (ROOT / path).resolve()
-    if not str(target).startswith(str(ROOT)) or not target.is_file():
-        return FileResponse(ROOT / "index.html")
+    if path not in PUBLIC_FILES:
+        raise HTTPException(status_code=404)
+    target = ROOT / path
+    if target.resolve() != target or not target.is_file():
+        raise HTTPException(status_code=404)
     return FileResponse(target)
 
 
