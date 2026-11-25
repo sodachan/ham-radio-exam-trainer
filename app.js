@@ -378,7 +378,6 @@ function submitPractice() {
 
   if (state.currentIndex < state.filtered.length - 1) {
     moveQuestion(1);
-    showFeedback("上一题回答正确，已进入下一题。", "success");
   } else {
     showFeedback("回答正确，已到当前练习范围的最后一题。", "success");
     els.nextBtn.disabled = true;
