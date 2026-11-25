@@ -192,8 +192,8 @@ select, input:not([type="radio"]):not([type="checkbox"]) {
 .option:has(input:checked) .option-key { background: var(--primary); color: white; }
 .option.correct, .feedback.success { border-color: #86b59b; background: #eff7f1; }
 .option.wrong, .feedback.error { border-color: #cc8f87; background: #fbf1ef; }
+.options[aria-invalid="true"] { outline: 2px solid #cc8f87; outline-offset: 3px; border-radius: 10px; }
 .actions { margin-top: 22px; padding-top: 18px; border-top: 1px solid var(--line); }
-#submitBtn { padding-inline: 28px; }
 .ai-panel-head, .section-head { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .ai-dialog {
   position: fixed;

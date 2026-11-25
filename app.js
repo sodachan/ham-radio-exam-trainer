@@ -136,7 +136,7 @@ function bindElements() {
     "bankSelect", "scopeSelect", "scopeLabel", "scopeField", "bankStatus", "practiceFigure",
     "subtitle", "statAnswered", "statAccuracy", "statWrong", "categorySelect", "orderSelect",
     "resetProgressBtn", "questionCounter", "questionType", "questionCategory", "questionText", "questionTextContent",
-    "options", "feedback", "prevBtn", "submitBtn", "nextBtn", "wrongList", "clearWrongBtn",
+    "options", "feedback", "prevBtn", "showAnswerBtn", "nextBtn", "wrongList", "clearWrongBtn",
     "examCount", "startExamBtn", "examSetup", "examPaper", "examResult", "categoryStats",
     "jumpDialog", "jumpTitle", "jumpHint", "jumpGrid", "closeJumpBtn",
     "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
@@ -166,8 +166,9 @@ function bindEvents() {
     renderPractice();
   });
   els.prevBtn.addEventListener("click", () => moveQuestion(-1));
-  els.nextBtn.addEventListener("click", () => moveQuestion(1));
-  els.submitBtn.addEventListener("click", submitPractice);
+  els.nextBtn.addEventListener("click", submitPractice);
+  els.showAnswerBtn.addEventListener("click", showPracticeAnswer);
+  els.options.addEventListener("change", clearPracticeFeedback);
   els.clearWrongBtn.addEventListener("click", clearWrong);
   els.resetProgressBtn.addEventListener("click", resetProgress);
   els.startExamBtn.addEventListener("click", startExam);
@@ -298,11 +299,14 @@ function renderPractice() {
   const question = state.filtered[state.currentIndex];
   els.practiceFigure.innerHTML = figureHtml(question);
   els.openAiBtn.disabled = !question;
+  els.showAnswerBtn.disabled = !question;
+  els.prevBtn.disabled = state.currentIndex === 0;
+  els.options.replaceChildren();
+  clearPracticeFeedback();
   if (!question) {
     els.questionCounter.textContent = "第 0 / 0 题";
     els.questionType.textContent = "";
     els.questionTextContent.textContent = "没有符合筛选条件的题目";
-    els.options.innerHTML = "";
     return;
   }
 
@@ -311,9 +315,6 @@ function renderPractice() {
   els.questionType.textContent = question.multi ? "多选" : "单选";
   els.questionCategory.textContent = `知识点 ${question.category}`;
   els.questionTextContent.textContent = question.question;
-  els.feedback.hidden = true;
-  els.feedback.className = "feedback";
-  els.options.innerHTML = "";
 
   Object.entries(question.options).forEach(([key, text]) => {
     const label = document.createElement("label");
@@ -325,18 +326,36 @@ function renderPractice() {
     els.options.append(label);
   });
 
-  els.prevBtn.disabled = state.currentIndex === 0;
-  els.nextBtn.disabled = state.currentIndex >= state.filtered.length - 1;
+}
+
+function clearPracticeFeedback() {
+  els.options.removeAttribute("aria-invalid");
+  els.options.querySelectorAll(".correct, .wrong").forEach(label => label.classList.remove("correct", "wrong"));
+  els.feedback.hidden = true;
+  els.feedback.textContent = "";
+  els.nextBtn.disabled = !state.filtered.length;
+  els.nextBtn.textContent = state.currentIndex === state.filtered.length - 1 ? "核对本题" : "下一题";
+}
+
+function showPracticeAnswer() {
+  const question = state.filtered[state.currentIndex];
+  if (!question) return;
+  els.options.removeAttribute("aria-invalid");
+  els.options.querySelectorAll(".option").forEach(label => {
+    label.classList.remove("wrong");
+    label.classList.toggle("correct", question.answer.includes(label.querySelector("input").value));
+  });
+  showFeedback(`正确答案：${question.answer.join("、")}。`);
 }
 
 function submitPractice() {
   const question = state.filtered[state.currentIndex];
   if (!question) return;
   const selected = selectedPracticeAnswers();
+  clearPracticeFeedback();
   if (!selected.length) {
-    els.feedback.hidden = false;
-    els.feedback.className = "feedback error";
-    els.feedback.textContent = "请先选择答案。";
+    els.options.setAttribute("aria-invalid", "true");
+    showFeedback("尚未作答，请先选择答案。", "error");
     return;
   }
 
@@ -347,17 +366,23 @@ function submitPractice() {
   renderWrongList();
   renderStats();
 
-  if (correct && state.currentIndex < state.filtered.length - 1) {
-    state.currentIndex += 1;
-    renderPractice();
-    els.feedback.hidden = false;
-    els.feedback.className = "feedback success";
-    els.feedback.textContent = "上一题回答正确，已进入下一题。";
+  if (!correct) {
+    els.options.setAttribute("aria-invalid", "true");
+    const wrong = selected.filter(key => !question.answer.includes(key));
+    els.options.querySelectorAll("input:checked").forEach(input => {
+      input.closest(".option").classList.toggle("wrong", wrong.includes(input.value));
+    });
+    showFeedback(wrong.length ? `${wrong.join("、")} 选错了，请修改后再核对。` : "答案还没选全，请补选后再核对。", "error");
     return;
   }
 
-  markOptions(question, selected);
-  showFeedback(correct, correct ? "回答正确。" : "回答错误。", question);
+  if (state.currentIndex < state.filtered.length - 1) {
+    moveQuestion(1);
+    showFeedback("上一题回答正确，已进入下一题。", "success");
+  } else {
+    showFeedback("回答正确，已到当前练习范围的最后一题。", "success");
+    els.nextBtn.disabled = true;
+  }
 }
 
 function selectedPracticeAnswers() {
@@ -380,18 +405,10 @@ function recordAnswer(question, selected, correct) {
   state.progress.wrong = [...wrongSet];
 }
 
-function markOptions(question, selected) {
-  els.options.querySelectorAll(".option").forEach((label) => {
-    const value = label.querySelector("input").value;
-    label.classList.toggle("correct", question.answer.includes(value));
-    label.classList.toggle("wrong", selected.includes(value) && !question.answer.includes(value));
-  });
-}
-
-function showFeedback(correct, message, question) {
+function showFeedback(message, type = "") {
   els.feedback.hidden = false;
-  els.feedback.className = `feedback ${correct ? "success" : "error"}`;
-  els.feedback.textContent = `${message} 正确答案：${question.answer.join("")}`;
+  els.feedback.className = `feedback ${type}`.trim();
+  els.feedback.textContent = message;
 }
 
 function showAiExplanation(result) {

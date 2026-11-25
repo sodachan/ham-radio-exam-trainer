@@ -76,13 +76,13 @@
           </div>
           <h2 id="questionText"><span id="questionType" class="question-kind">单选</span><span id="questionTextContent">题库载入中</span></h2>
           <div id="practiceFigure"></div>
-          <div id="options" class="options"></div>
+          <div id="options" class="options" role="group" aria-labelledby="questionText" aria-describedby="feedback"></div>
           <div id="feedback" class="feedback" hidden></div>
           <div class="actions">
-            <button id="submitBtn" type="button">提交答案</button>
+            <button id="showAnswerBtn" class="secondary" type="button">显示答案</button>
             <div class="nav-actions">
               <button id="prevBtn" class="secondary" type="button">上一题</button>
-              <button id="nextBtn" class="secondary" type="button">下一题</button>
+              <button id="nextBtn" type="button">下一题</button>
             </div>
           </div>
         </article>
