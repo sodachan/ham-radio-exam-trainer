@@ -17,7 +17,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 
 
 ROOT = Path(__file__).resolve().parent
@@ -80,6 +80,17 @@ class RegisterPayload(Credentials):
 class ProgressPayload(BaseModel):
     answers: dict
     wrong: list
+
+
+class PracticePosition(BaseModel):
+    bank: Bank
+    question: str = Field(max_length=64)
+    scope: Literal["all", "upgrade"]
+    category: str = Field(max_length=64)
+    order: Literal["sequential", "random"]
+    seed: int = Field(ge=0, le=2**32 - 1)
+    selected: list[Literal["A", "B", "C", "D"]]
+    updated: int = Field(ge=0, le=2**53 - 1)
 
 
 class ExplainPayload(BaseModel):
@@ -147,6 +158,12 @@ def init_db():
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS practice_positions (
+                user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                payload TEXT NOT NULL,
+                updated INTEGER NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS invite_codes (
@@ -487,8 +504,24 @@ def logout(response: Response, session_token: Optional[str] = Cookie(default=Non
 
 
 @app.get("/api/me")
-def me(user=Depends(current_user)):
-    return {"username": user["username"], "isAdmin": user["username"] == ADMIN_USERNAME}
+def me(response: Response, user=Depends(current_user)):
+    response.headers["Cache-Control"] = "private, no-store"
+    position = one("SELECT payload FROM practice_positions WHERE user_id=?", (user["id"],))
+    recent = None if position else one(
+        "SELECT bank FROM progress WHERE user_id=? ORDER BY updated_at DESC LIMIT 1", (user["id"],))
+    return {"username": user["username"], "isAdmin": user["username"] == ADMIN_USERNAME,
+            "position": json.loads(position["payload"]) if position else None,
+            "recentBank": recent["bank"] if recent else None}
+
+
+@app.put("/api/practice-position")
+def save_practice_position(payload: PracticePosition, user=Depends(current_user)):
+    execute("""
+        INSERT INTO practice_positions(user_id, payload, updated) VALUES (?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload, updated=excluded.updated
+        WHERE excluded.updated > practice_positions.updated
+    """, (user["id"], payload.model_dump_json(), payload.updated))
+    return {"ok": True}
 
 
 def admin_user(user=Depends(current_user)):

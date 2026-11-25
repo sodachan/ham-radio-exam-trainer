@@ -3,6 +3,7 @@ const STORAGE_KEY = "hamExamProgressV1";
 const bankFiles = { A: "/questions.json", B: "/questions-B.json", C: "/questions-C.json" };
 let switchVersion = 0;
 let pendingSave = Promise.resolve();
+let positionWrite = Promise.resolve();
 let celebrationTimer;
 
 const state = {
@@ -12,6 +13,8 @@ const state = {
   questions: [],
   filtered: [],
   currentIndex: 0,
+  position: null,
+  orderSeed: 0,
   mode: "practice",
   submitted: false,
   exam: null,
@@ -42,8 +45,12 @@ async function init() {
     document.getElementById("adminLink").hidden = !state.currentUser.isAdmin;
     els.startPrecacheBtn.hidden = !state.currentUser.isAdmin;
     els.bankSelect.disabled = false;
-    const saved = localStorage.getItem(bankPreferenceKey());
-    await switchBank(Object.hasOwn(bankFiles, saved) ? saved : "A");
+    const remote = state.currentUser.position;
+    const local = loadJson(positionKey(), null);
+    const position = local?.updated > (remote?.updated || 0) ? local : remote;
+    const bank = position?.bank || localStorage.getItem(bankPreferenceKey()) || state.currentUser.recentBank;
+    await switchBank(Object.hasOwn(bankFiles, bank) ? bank : "A", position, true);
+    if (position && position === local && state.position === local) writePosition(local);
     await refreshPrecacheStatus();
     state.precacheTimer = setInterval(refreshPrecacheStatus, 10000);
   } catch (error) {
@@ -56,11 +63,15 @@ function bankPreferenceKey() {
   return "hamExamBank:" + state.currentUser.username;
 }
 
+function positionKey() {
+  return "hamPracticePosition:" + state.currentUser.username;
+}
+
 function setLearningControlsBusy(busy) {
   document.querySelectorAll(".toolbar, .view").forEach(el => { el.inert = busy; });
 }
 
-async function switchBank(bank) {
+async function switchBank(bank, position = null, initial = false) {
   if (!state.currentUser) return;
   const version = ++switchVersion;
   els.bankSelect.value = bank;
@@ -91,10 +102,33 @@ async function switchBank(bank) {
     els.examResult.replaceChildren();
     els.jumpDialog.close();
     els.aiDialog.close();
-    els.orderSelect.value = "sequential";
+    els.orderSelect.value = position?.order === "random" ? "random" : "sequential";
     els.scopeSelect.replaceChildren(new Option(`全部 ${bank} 类题（${payload.count}）`, "all"));
     if (bank !== "A") els.scopeSelect.add(new Option(`${bank} 类新增题（${payload.upgradeIds.length}）`, "upgrade"));
-    updateScope();
+    if (position?.scope === "upgrade" && bank !== "A") els.scopeSelect.value = "upgrade";
+    updateScope(position?.category, position?.seed);
+    if (position) {
+      state.position = position;
+      state.currentIndex = Math.max(0, state.filtered.findIndex(q => q.type === position.question));
+    } else if (initial) {
+      // Older accounts only have graded answers, not an exact browsing position.
+      let latest = -1;
+      let timestamp = "";
+      state.filtered.forEach((q, index) => {
+        const at = progress.answers[q.type]?.at;
+        if (at && at >= timestamp) {
+          latest = index;
+          timestamp = at;
+        }
+      });
+      if (latest >= 0) {
+        const answer = progress.answers[state.filtered[latest].type];
+        state.currentIndex = Math.min(latest + (answer.correct ? 1 : 0), state.filtered.length - 1);
+        if (state.currentIndex === latest && Array.isArray(answer.selected)) {
+          state.position = { bank, question: state.filtered[latest].type, selected: answer.selected, updated: 0 };
+        }
+      }
+    }
     els.resetProgressBtn.textContent = `清空 ${bank} 类进度`;
     els.clearWrongBtn.textContent = `清空 ${bank} 类错题`;
     renderAll();
@@ -127,6 +161,9 @@ async function fetchCurrentUser() {
 }
 
 async function logout() {
+  setLearningControlsBusy(true);
+  els.bankSelect.disabled = true;
+  await Promise.all([pendingSave, positionWrite]);
   await fetch("/api/auth/logout", { method: "POST" });
   // 退出登录，重定向回登录页
   window.location.href = "/";
@@ -170,7 +207,10 @@ function bindEvents() {
   els.prevBtn.addEventListener("click", () => moveQuestion(-1));
   els.nextBtn.addEventListener("click", submitPractice);
   els.showAnswerBtn.addEventListener("click", showPracticeAnswer);
-  els.options.addEventListener("change", clearPracticeFeedback);
+  els.options.addEventListener("change", () => {
+    clearPracticeFeedback();
+    rememberPosition();
+  });
   els.clearWrongBtn.addEventListener("click", clearWrong);
   els.resetProgressBtn.addEventListener("click", resetProgress);
   els.startExamBtn.addEventListener("click", startExam);
@@ -205,7 +245,7 @@ function syncScopeLabel() {
   els.scopeLabel.textContent = `${state.bank} 类新增题`;
 }
 
-function updateScope() {
+function updateScope(category, seed) {
   const ids = new Set(state.payload.upgradeIds);
   state.scoped = els.scopeSelect.value === "upgrade"
     ? state.questions.filter(question => ids.has(question.type))
@@ -218,7 +258,8 @@ function updateScope() {
     option.textContent = topicLabel(category);
     els.categorySelect.append(option);
   });
-  applyFilter();
+  if ([...els.categorySelect.options].some(option => option.value === category)) els.categorySelect.value = category;
+  applyFilter(seed);
 }
 
 function loadProgress() {
@@ -248,13 +289,19 @@ function loadJson(key, fallback) {
   }
 }
 
-function applyFilter() {
+function applyFilter(seed) {
   const category = els.categorySelect.value;
   state.filtered = category === "all"
     ? [...state.scoped]
     : state.scoped.filter((question) => question.category === category);
+  state.orderSeed = 0;
   if (els.orderSelect.value === "random") {
-    shuffle(state.filtered);
+    state.orderSeed = seed ?? Math.floor(Math.random() * 2 ** 32);
+    let value = state.orderSeed;
+    shuffle(state.filtered, () => {
+      value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
+      return value / 2 ** 32;
+    });
   }
   state.currentIndex = 0;
   state.submitted = false;
@@ -325,9 +372,37 @@ function renderPractice() {
       <input name="practiceOption" type="${question.multi ? "checkbox" : "radio"}" value="${key}">
       <strong class="option-key">${key}</strong><span>${escapeHtml(text)}</span>
     `;
+    if (state.position?.bank === state.bank && state.position.question === question.type) {
+      label.querySelector("input").checked = state.position.selected.includes(key);
+    }
     els.options.append(label);
   });
+  rememberPosition();
+}
 
+function rememberPosition() {
+  const question = state.filtered[state.currentIndex];
+  if (!question) return;
+  const last = state.position;
+  const selected = selectedPracticeAnswers();
+  const fields = { bank: state.bank, question: question.type, scope: els.scopeSelect.value,
+    category: els.categorySelect.value, order: els.orderSelect.value, seed: state.orderSeed };
+  if (last && Object.entries(fields).every(([key, value]) => last[key] === value)
+      && sameAnswers(selected, last.selected)) return;
+  state.position = { ...fields, selected, updated: Math.max(Date.now(), (last?.updated || 0) + 1) };
+  localStorage.setItem(positionKey(), JSON.stringify(state.position));
+  writePosition(state.position);
+}
+
+function writePosition(position) {
+  positionWrite = fetch("/api/practice-position", {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(position), keepalive: true,
+  }).then(response => {
+    if (!response.ok) throw new Error("保存失败");
+  }).catch(() => {
+    if (state.position === position) els.bankStatus.textContent = "续刷位置已保存在本机，暂未同步到服务器。";
+  });
 }
 
 function clearPracticeFeedback() {
@@ -780,6 +855,10 @@ function clearWrong() {
 function resetProgress() {
   clearCelebration();
   state.progress = { answers: {}, wrong: [] };
+  if (state.position) state.position = { ...state.position, question: "", selected: [] };
+  els.scopeSelect.value = "all";
+  els.orderSelect.value = "sequential";
+  updateScope();
   saveProgress();
   renderAll();
 }
@@ -936,9 +1015,9 @@ function sameAnswers(left, right) {
   return left.length === right.length && left.every((value, index) => value === [...right].sort()[index]);
 }
 
-function shuffle(items) {
+function shuffle(items, random = Math.random) {
   for (let index = items.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const swapIndex = Math.floor(random() * (index + 1));
     [items[index], items[swapIndex]] = [items[swapIndex], items[index]];
   }
   return items;
