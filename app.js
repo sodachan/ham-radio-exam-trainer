@@ -3,6 +3,7 @@ const STORAGE_KEY = "hamExamProgressV1";
 const bankFiles = { A: "/questions.json", B: "/questions-B.json", C: "/questions-C.json" };
 let switchVersion = 0;
 let pendingSave = Promise.resolve();
+let celebrationTimer;
 
 const state = {
   bank: null,
@@ -78,6 +79,7 @@ async function switchBank(bank) {
       fetchJson(bankFiles[bank]), fetchJson(`/api/progress?bank=${bank}`),
     ]);
     if (version !== switchVersion) return;
+    clearCelebration();
     state.bank = bank;
     state.payload = payload;
     state.questions = payload.questions;
@@ -139,7 +141,7 @@ function bindElements() {
     "options", "feedback", "prevBtn", "showAnswerBtn", "nextBtn", "wrongList", "clearWrongBtn",
     "examCount", "startExamBtn", "examSetup", "examPaper", "examResult", "categoryStats",
     "jumpDialog", "jumpTitle", "jumpHint", "jumpGrid", "closeJumpBtn",
-    "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn",
+    "appShell", "currentUserLabel", "logoutBtn", "generateAiBtn", "regenerateAiBtn", "topicCelebration",
     "openAiBtn", "aiDialog", "aiQuestionInfo", "aiCacheInfo", "aiStatus", "aiContent", "cacheToolStatus", "startPrecacheBtn",
   ].forEach((id) => {
     els[id] = document.getElementById(id);
@@ -360,7 +362,7 @@ function submitPractice() {
   }
 
   const correct = sameAnswers(selected, question.answer);
-  recordAnswer(question, selected, correct);
+  if (recordAnswer(question, selected, correct)) celebrateCompletedTopics(new Set([question.category]));
   saveProgress();
   renderHeader();
   renderWrongList();
@@ -389,6 +391,7 @@ function selectedPracticeAnswers() {
 }
 
 function recordAnswer(question, selected, correct) {
+  const newlyCorrect = correct && !state.progress.answers[question.type]?.correct;
   state.progress.answers[question.type] = {
     correct,
     selected,
@@ -402,6 +405,27 @@ function recordAnswer(question, selected, correct) {
     wrongSet.add(question.type);
   }
   state.progress.wrong = [...wrongSet];
+  return newlyCorrect;
+}
+
+function celebrateCompletedTopics(candidates) {
+  const completed = [...candidates].filter(code => state.questions.every(question =>
+    question.category !== code || state.progress.answers[question.type]?.correct));
+  if (!completed.length) return;
+
+  clearCelebration();
+  const title = completed.length === 1 ? "知识点完成" : `完成 ${completed.length} 个知识点`;
+  const detail = completed.length === 1 ? topicLabel(completed[0]) : `${state.bank} 类 · 本次交卷`;
+  els.topicCelebration.innerHTML = `<div class="topic-celebration">
+    <span class="radio-pulse" aria-hidden="true"></span>
+    <div><strong>${title}</strong><p>${escapeHtml(detail)}</p></div>
+  </div>`;
+  celebrationTimer = setTimeout(clearCelebration, 3200);
+}
+
+function clearCelebration() {
+  clearTimeout(celebrationTimer);
+  els.topicCelebration.replaceChildren();
 }
 
 function showFeedback(message, type = "") {
@@ -754,6 +778,7 @@ function clearWrong() {
 }
 
 function resetProgress() {
+  clearCelebration();
   state.progress = { answers: {}, wrong: [] };
   saveProgress();
   renderAll();
@@ -801,15 +826,17 @@ function renderExamPaper() {
 }
 
 function submitExam() {
+  const candidates = new Set();
   const rows = state.exam.questions.map((question, index) => {
     const selected = [...els.examPaper.querySelectorAll(`input[name="exam-${index}"]:checked`)]
       .map((input) => input.value)
       .sort();
     const correct = sameAnswers(selected, question.answer);
-    recordAnswer(question, selected, correct);
+    if (recordAnswer(question, selected, correct)) candidates.add(question.category);
     return { question, selected, correct };
   });
   state.exam.submitted = true;
+  celebrateCompletedTopics(candidates);
   saveProgress();
   const correctCount = rows.filter((row) => row.correct).length;
   els.examPaper.hidden = true;
